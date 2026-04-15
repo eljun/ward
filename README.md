@@ -10,8 +10,10 @@ The goal is not narration. The goal is a quiet senior dev riding shotgun.
 ## Install
 
 ```bash
-claude plugin install github.com/eljun/ward
+npm install -g github:eljun/ward
 ```
+
+This runs `bootstrap.py` automatically via a postinstall hook, creating `~/.ward/` with seed config, persona, and state files.
 
 WARD is currently:
 - globally installed
@@ -54,13 +56,13 @@ http://127.0.0.1:11434
 
 ### 2. Bootstrap WARD Home
 
-After installing the plugin, initialize WARD's home directory:
+`npm install -g github:eljun/ward` runs bootstrap automatically. If it was skipped or you need to re-run it:
 
 ```bash
-python3 /path/to/ward/scripts/bootstrap.py
+python3 ~/.ward/scripts/bootstrap.py
 ```
 
-If you are already inside the WARD repo:
+Or from inside the WARD repo:
 
 ```bash
 python3 scripts/bootstrap.py

@@ -1,0 +1,27 @@
+{
+  "name": "ward-claude",
+  "version": "1.3.0",
+  "description": "WARD — Workspace Aware Recap Daemon. A peer developer voice presence for Claude Code.",
+  "author": {
+    "name": "Eleazar G. Junsan",
+    "url": "https://github.com/eljun"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eljun/ward"
+  },
+  "license": "MIT",
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "ai",
+    "voice",
+    "developer-tools"
+  ],
+  "engines": {
+    "node": ">=16"
+  }
+}
