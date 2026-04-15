@@ -15,6 +15,8 @@
 **Persona:** Ward
 **Design Philosophy:** Fail toward silence. Speak only when there is something worth saying. 1–2 sentences maximum per response.
 
+**Install model:** Global install, project-aware runtime. WARD is installed once, stores config/persona/state in `~/.ward`, and switches project context based on the current working directory.
+
 ### 1.1 Architecture Direction
 
 WARD started as a hook-reactive companion: each hook event directly produced a spoken line. That design was simple but sounded robotic because the trigger itself became the content.
@@ -49,6 +51,7 @@ ward/
 ├── persona.txt                      # Peer developer system prompt
 ├── config.json                      # User preferences (voice, brain, proactive settings, projects)
 ├── state.json                       # Session + conversation memory
+├── scripts/bootstrap.py             # Seeds ~/.ward on first install
 ├── CHANGELOG.md                     # Version history
 └── README.md                        # Setup and usage instructions
 ```
@@ -83,7 +86,7 @@ ward/
 
 ### 4.1 config.json
 
-Stored at `~/.ward/config.json`. Created on first run if absent.
+Stored at `~/.ward/config.json`. Seeded by `scripts/bootstrap.py`.
 
 ```json
 {
@@ -196,6 +199,20 @@ Stored at `~/.ward/state.json` or `~/.ward/states/{project}.json`. Written by `s
 - **Conversation memory:** recent Ward lines, the last user/assistant turn, the last long response, and proactive cooldown metadata
 
 This is what allows Ward to stay concise, avoid saying the same thing twice, and later summarize a long assistant answer if the user asks.
+
+### 4.5 Bootstrap
+
+WARD does not assume `~/.ward` already exists. First-time setup should run:
+
+```bash
+python3 scripts/bootstrap.py
+```
+
+Behavior:
+- creates `~/.ward/`
+- creates `~/.ward/states/`
+- copies seed `config.json`, `persona.txt`, and `state.json` if they do not already exist
+- preserves existing files unless `--force` is passed
 
 ---
 
@@ -370,7 +387,13 @@ Single-responsibility: shared config/state helpers used by hooks so all state re
 
 ---
 
-### 6.3 speak.py
+### 6.3 bootstrap.py
+
+Single-responsibility: initialize `~/.ward` from repo templates so first-time setup works without manual file copying.
+
+---
+
+### 6.4 speak.py
 
 Single-responsibility: receive text string, speak it using configured provider.
 
@@ -696,12 +719,12 @@ When building this plugin, follow this order:
 
 1. Create directory structure exactly as defined in Section 2
 2. Write `plugin.json` manifest first — Claude Code reads this on install
-3. Write `speak.py` and test with `python3 speak.py "test"` before wiring hooks
-4. Write `brain.py` and test standalone with a mock context dict
-5. Write hooks in order: `session_start.py` → `post_tool_use.py` → `post_response.py` → `session_end.py`
-6. Write `persona.txt` — treat this as a first-class deliverable, not boilerplate
-7. Write `recap.md` command
-8. Create default `config.json` and `state.json` templates
+3. Create default `config.json`, `persona.txt`, and `state.json` templates
+4. Write `bootstrap.py` so first install can seed `~/.ward`
+5. Write `speak.py` and test with `python3 speak.py "test"` before wiring hooks
+6. Write `brain.py` and test standalone with a mock context dict
+7. Write hooks in order: `session_start.py` → `post_tool_use.py` → `post_response.py` → `session_end.py`
+8. Write `recap.md` and `summary.md` commands
 9. Write `README.md` and `CHANGELOG.md`
 10. Test end-to-end by installing locally: `claude plugin install --local ./ward`
 

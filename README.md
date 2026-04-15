@@ -13,6 +13,39 @@ The goal is not narration. The goal is a quiet senior dev riding shotgun.
 claude plugin install github.com/eljun/ward
 ```
 
+WARD is currently:
+- globally installed
+- globally configured under `~/.ward`
+- project-aware at runtime through the `projects` map in `~/.ward/config.json`
+
+That means you install WARD once, then point it at one or more projects.
+
+### Bootstrap WARD Home
+
+After installing the plugin, initialize WARD's home directory:
+
+```bash
+python3 /path/to/ward/scripts/bootstrap.py
+```
+
+If you are already inside the WARD repo:
+
+```bash
+python3 scripts/bootstrap.py
+```
+
+This creates:
+- `~/.ward/config.json`
+- `~/.ward/persona.txt`
+- `~/.ward/state.json`
+- `~/.ward/states/`
+
+Existing files are preserved. Use `--force` only if you explicitly want to overwrite the seed files:
+
+```bash
+python3 scripts/bootstrap.py --force
+```
+
 ## First-Time Setup
 
 ### 1. Set your AI provider key (required)
@@ -161,6 +194,11 @@ Edit `~/.ward/config.json`:
 ```
 `tasks_md_path` is relative to the project root.
 
+WARD is project-aware, not project-local:
+- install is global
+- config/persona live in `~/.ward`
+- task mapping and per-project state are selected by the current working directory
+
 ### 6. Personalize Ward's persona (optional)
 
 Edit `~/.ward/persona.txt` to add your project context, tech stack, and tone preferences.
@@ -199,6 +237,7 @@ Run `/summary` after Ward says he left the detailed breakdown in chat and you wa
 - Check that your configured provider key is set:
 - `echo $WARD_ANTHROPIC_API_KEY`
 - `echo $WARD_OPENAI_API_KEY`
+- Run `python3 scripts/bootstrap.py` if `~/.ward/config.json` or `~/.ward/persona.txt` does not exist yet
 - Confirm Python 3.9+ is available: `python3 --version`
 - Run `python3 scripts/speak.py "test"` from the ward repo to test TTS
 
