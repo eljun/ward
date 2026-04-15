@@ -33,16 +33,23 @@ def copy_seed(src_name: str, dest_name: str, force: bool) -> str:
     return f"wrote: {dest_path}"
 
 
-def main() -> int:
-    force = "--force" in sys.argv[1:]
-
+def ensure_ward_home(force: bool = False) -> list[str]:
     os.makedirs(WARD_HOME, exist_ok=True)
     os.makedirs(os.path.join(WARD_HOME, "states"), exist_ok=True)
 
+    messages = []
     for src_name, dest_name in SEED_FILES:
-        print(copy_seed(src_name, dest_name, force))
+        messages.append(copy_seed(src_name, dest_name, force))
 
-    print(f"WARD home ready: {WARD_HOME}")
+    messages.append(f"WARD home ready: {WARD_HOME}")
+    return messages
+
+
+def main() -> int:
+    force = "--force" in sys.argv[1:]
+
+    for message in ensure_ward_home(force=force):
+        print(message)
     return 0
 
 

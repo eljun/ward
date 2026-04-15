@@ -47,11 +47,13 @@ ward/
 │   └── speak.py                     # TTS dispatcher (macOS → ElevenLabs)
 ├── commands/
 │   ├── recap.md                     # /recap slash command
-│   └── summary.md                   # /summary slash command
+│   ├── summary.md                   # /summary slash command
+│   └── ward-init.md                 # /ward-init slash command
 ├── persona.txt                      # Peer developer system prompt
 ├── config.json                      # User preferences (voice, brain, proactive settings, projects)
 ├── state.json                       # Session + conversation memory
 ├── scripts/bootstrap.py             # Seeds ~/.ward on first install
+├── scripts/init_project.py          # Registers current project in ~/.ward/config.json
 ├── CHANGELOG.md                     # Version history
 └── README.md                        # Setup and usage instructions
 ```
@@ -213,6 +215,22 @@ Behavior:
 - creates `~/.ward/states/`
 - copies seed `config.json`, `persona.txt`, and `state.json` if they do not already exist
 - preserves existing files unless `--force` is passed
+
+### 4.6 Project Registration
+
+WARD is globally configured but project-aware. Registering a project means adding the current working directory to `~/.ward/config.json` under `projects`.
+
+This is handled by:
+
+```bash
+python3 scripts/init_project.py
+```
+
+Behavior:
+- bootstraps `~/.ward` first if needed
+- infers `project_name` from the directory name unless `--name` is passed
+- infers `tasks_md_path` from common task-file locations unless `--tasks` is passed
+- writes or updates the matching project entry in `~/.ward/config.json`
 
 ---
 
@@ -393,7 +411,13 @@ Single-responsibility: initialize `~/.ward` from repo templates so first-time se
 
 ---
 
-### 6.4 speak.py
+### 6.4 init_project.py
+
+Single-responsibility: register the current project in global WARD config without requiring the user to edit `~/.ward/config.json` manually.
+
+---
+
+### 6.5 speak.py
 
 Single-responsibility: receive text string, speak it using configured provider.
 
@@ -530,6 +554,24 @@ Steps:
 - Calls `brain.py` with `event="summary_request"` and `mode="summary"`
 - Speaks the compact summary through `speak.py`
 - Clears `summary_offer_available` after a successful summary request
+
+### 8.3 The /ward-init Command
+
+**File:** `commands/ward-init.md`
+
+```markdown
+---
+description: Register the current project in ~/.ward/config.json so WARD can track it automatically.
+---
+
+Initialize WARD for the current project without hand-editing the global config.
+
+Steps:
+1. Determine the WARD repo root from the location of this command file.
+2. Run `python3 {ward_repo}/scripts/init_project.py` from the current working directory.
+3. If the project is already configured, tell the user the existing mapping and mention `--force` if they want to replace it.
+4. After success, tell the user to run `/recap` once in this project.
+```
 
 ---
 

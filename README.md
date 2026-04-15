@@ -46,6 +46,28 @@ Existing files are preserved. Use `--force` only if you explicitly want to overw
 python3 scripts/bootstrap.py --force
 ```
 
+### Register A Project
+
+From inside a project you want WARD to track:
+
+```bash
+python3 /path/to/ward/scripts/init_project.py
+```
+
+If you are already inside the WARD repo and want to register another project:
+
+```bash
+python3 scripts/init_project.py --cwd /absolute/path/to/project
+```
+
+You can also override the inferred defaults:
+
+```bash
+python3 scripts/init_project.py --name "My Project" --tasks docs/TASKS.md
+```
+
+This writes the current project entry into `~/.ward/config.json` so you do not have to edit the global config manually.
+
 ## First-Time Setup
 
 ### 1. Set your AI provider key (required)
@@ -181,7 +203,12 @@ Model is set to `eleven_turbo_v2` by default for lowest latency (~500ms).
 
 ### 5. Add your projects
 
-Edit `~/.ward/config.json`:
+You can register projects automatically with:
+```bash
+python3 scripts/init_project.py
+```
+
+Or edit `~/.ward/config.json` manually:
 ```json
 {
   "projects": {
@@ -226,6 +253,7 @@ Proactive behavior is gated hard before the model is called:
 /recap         — Re-sync Ward from your tasks file (active sections only)
 /recap full    — Re-sync Ward from your full tasks file
 /summary       — Ask Ward to summarize the last long reply he saved for later
+/ward-init     — Register the current project in ~/.ward/config.json
 ```
 
 Run `/recap` any time your priorities shift mid-session or at the start of a new week.
