@@ -7,6 +7,8 @@
   "brain_provider": "openai",
   "brain_model": "gpt-5.4-nano",
   "brain_models": {},
+  "ollama_host": "http://127.0.0.1:11434",
+  "ollama_think": false,
   "proactive": {
     "enabled": true,
     "cooldown_seconds": 90,

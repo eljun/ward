@@ -8,6 +8,7 @@ return spoken text or JSON state/decision payloads.
 import json
 import os
 import sys
+import urllib.request
 
 WARD_DIR = os.path.expanduser("~/.ward")
 CONFIG_PATH = os.path.join(WARD_DIR, "config.json")
@@ -21,6 +22,9 @@ CONFIG_DEFAULTS = {
     "brain_model": "gpt-5.4-nano",
     "brain_providers": {},
     "brain_models": {},
+    "ollama_host": "http://127.0.0.1:11434",
+    "ollama_think": False,
+    "ollama_think_modes": {},
 }
 
 
@@ -87,6 +91,20 @@ def _resolve_provider_and_model(config: dict, event: str, mode: str) -> tuple[st
     return provider, model
 
 
+def _resolve_ollama_think(config: dict, event: str, mode: str):
+    overrides = config.get("ollama_think_modes", {})
+    candidates = (
+        f"{event}:{mode}",
+        event,
+        mode,
+        "default",
+    )
+    for candidate in candidates:
+        if candidate in overrides:
+            return overrides[candidate]
+    return config.get("ollama_think", CONFIG_DEFAULTS["ollama_think"])
+
+
 def _call_anthropic(persona: str, user_message: str, model: str, max_tokens: int) -> str:
     try:
         import anthropic
@@ -146,6 +164,40 @@ def _call_openai(persona: str, user_message: str, model: str, max_tokens: int) -
     return _extract_openai_text(response)
 
 
+def _call_ollama(config: dict, persona: str, user_message: str, model: str, max_tokens: int, event: str, mode: str) -> str:
+    host = config.get("ollama_host", CONFIG_DEFAULTS["ollama_host"]).rstrip("/")
+    url = f"{host}/api/chat"
+    body = {
+        "model": model,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": persona},
+            {"role": "user", "content": user_message},
+        ],
+        "options": {
+            "num_predict": max_tokens,
+        },
+        "think": _resolve_ollama_think(config, event=event, mode=mode),
+    }
+    if mode in {"decision", "state"}:
+        body["format"] = "json"
+    payload = json.dumps(body).encode("utf-8")
+
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    with urllib.request.urlopen(req, timeout=120) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
+    message = data.get("message", {})
+    content = message.get("content", "")
+    return str(content).strip()
+
+
 def run(event: str, context: dict, mode: str = "speak") -> str:
     """
     event: session_start | tool_error | session_end | recap | post_response | summary_request
@@ -166,6 +218,8 @@ def run(event: str, context: dict, mode: str = "speak") -> str:
         return _call_anthropic(persona, user_message, model, max_tokens)
     if provider == "openai":
         return _call_openai(persona, user_message, model, max_tokens)
+    if provider == "ollama":
+        return _call_ollama(config, persona, user_message, model, max_tokens, event, mode)
     raise ValueError(f"Unsupported brain_provider: {provider}")
 
 

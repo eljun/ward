@@ -1,9 +1,9 @@
 # WARD — Workspace Aware Recap Daemon
-## Claude Code Plugin · Technical Specification v1.1.0
+## Claude Code Plugin · Technical Specification v1.2.0
 
 **Author:** Jun (Eleazar G. Junsan)
 **Created:** April 15, 2026
-**Status:** Implemented and locally verified for the 1.1.0 release
+**Status:** Implemented and locally verified for the 1.2.0 release
 
 ---
 
@@ -68,7 +68,7 @@ ward/
 {
   "name": "ward",
   "description": "WARD — Workspace Aware Recap Daemon. A peer developer voice presence for Claude Code. Ward greets you, recaps your last session, reacts to errors, comments on meaningful turns, and wraps up when you're done.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": {
     "name": "Eleazar G. Junsan",
     "url": "https://github.com/eljun"
@@ -134,9 +134,11 @@ Stored at `~/.ward/config.json`. Seeded by `scripts/bootstrap.py`.
 | `elevenlabs_voice_id` | string | — | ElevenLabs voice ID from their voice library |
 | `elevenlabs_model` | string | `"eleven_turbo_v2"` | ElevenLabs model. Use turbo for speed |
 | `persona_name` | string | `"Dev"` | Your name — what Ward calls you. Substituted into `persona.txt` at runtime |
-| `brain_provider` | string | `"openai"` | `"openai"` or `"anthropic"` |
+| `brain_provider` | string | `"openai"` | `"openai"`, `"anthropic"`, or `"ollama"` |
 | `brain_model` | string | `"gpt-5.4-nano"` | Base model used when no override matches |
 | `brain_models` | object | `{}` | Per-event or per-mode model overrides. Resolution order: `event:mode` → `event` → `mode` → `default` → `brain_model` |
+| `ollama_host` | string | `"http://127.0.0.1:11434"` | Base URL for local Ollama when `brain_provider` is `"ollama"` |
+| `ollama_think` | boolean/string | `false` | Passed through to Ollama's `think` field. Recommended `false` for WARD's concise and structured outputs |
 | `proactive` | object | see above | Local gating knobs for proactive turn review |
 | `speak_on` | array | see above | Which events trigger voice |
 | `projects` | object | `{}` | Per-project config keyed by absolute path |
@@ -394,6 +396,11 @@ elif provider == "anthropic":
 
 **Current default:** `openai / gpt-5.4-nano`
 
+**Supported providers:**
+- `openai`
+- `anthropic`
+- `ollama` for local models served through the Ollama daemon
+
 **Recommended split:**
 - `post_response:decision` → cheap fast model such as `gpt-5.4-nano`
 - `summary_request:summary` → stronger small model such as `gpt-5.4-mini`
@@ -589,6 +596,17 @@ Format: [version] — date — description
 
 ---
 
+## [1.2.0] — 2026-04-15
+
+### Local + Onboarding Release
+- Added `bootstrap.py` so `~/.ward` can be initialized cleanly on first install
+- Added `init_project.py` and `/ward-init` for easy project registration without hand-editing global config
+- Added `/summary` and `summary_request.py` for on-demand spoken summaries of saved long replies
+- Added Ollama as a third brain provider with configurable `ollama_host`
+- Added `ollama_think` and per-mode `ollama_think_modes` support
+- Verified `gemma4:e4b` works for proactive decisions and spoken summaries
+- Documented WARD clearly as global install + project-aware runtime
+
 ## [1.1.0] — 2026-04-15
 
 ### Proactive Refactor Release
@@ -749,7 +767,7 @@ ElevenLabs Turbo v2 is approximately $0.0003 per spoken line.
 
 ## Version
 
-Current version: 1.1.0
+Current version: 1.2.0
 See CHANGELOG.md for full version history.
 ```
 

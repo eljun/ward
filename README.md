@@ -97,7 +97,7 @@ Ward will use this name when speaking to you.
 
 ### 3. Choose your brain model
 
-WARD can use either Anthropic or OpenAI for its text generation.
+WARD can use OpenAI, Anthropic, or a local Ollama model for text generation.
 
 OpenAI default:
 ```json
@@ -114,6 +114,18 @@ Anthropic example:
   "brain_model": "claude-haiku-4-5-20251001"
 }
 ```
+
+Local Ollama example:
+```json
+{
+  "brain_provider": "ollama",
+  "brain_model": "gemma4:e4b",
+  "ollama_host": "http://127.0.0.1:11434",
+  "ollama_think": false
+}
+```
+
+`ollama_think: false` is the recommended default for WARD. It reduces the chance that a local thinking-capable model emits extra reasoning content when WARD really needs a short answer or valid JSON.
 
 You can also override models by event or mode:
 ```json
@@ -295,9 +307,10 @@ Run `/summary` after Ward says he left the detailed breakdown in chat and you wa
 ## Cost
 
 Ward can use Anthropic or OpenAI for AI calls. Cost depends on the configured provider and model.
+Ollama can be used as a local third option if you want no remote API call for WARD at all.
 ElevenLabs Turbo v2 is approximately $0.0003 per spoken line.
 
 ## Version
 
-Current version: 1.1.0
+Current version: 1.2.0
 See [CHANGELOG.md](CHANGELOG.md) for full version history.
