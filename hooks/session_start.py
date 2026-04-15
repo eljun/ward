@@ -28,7 +28,6 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 WARD_DIR = os.path.expanduser("~/.ward")
 CONFIG_PATH = os.path.join(WARD_DIR, "config.json")
-STATE_PATH = os.path.join(WARD_DIR, "state.json")
 
 
 def load_json(path: str) -> dict:
@@ -37,6 +36,18 @@ def load_json(path: str) -> dict:
             return json.load(f)
     except Exception:
         return {}
+
+
+def get_state_path(cwd: str, config: dict) -> str:
+    """Return per-project state path, falling back to global state.json."""
+    project_config = config.get("projects", {}).get(cwd, {})
+    project_name = project_config.get("project_name", "")
+    if project_name:
+        safe_name = project_name.lower().replace(" ", "_").replace("-", "_")
+        states_dir = os.path.join(WARD_DIR, "states")
+        os.makedirs(states_dir, exist_ok=True)
+        return os.path.join(states_dir, f"{safe_name}.json")
+    return os.path.join(WARD_DIR, "state.json")
 
 
 def main() -> None:
@@ -48,7 +59,8 @@ def main() -> None:
 
     cwd = payload.get("cwd", os.getcwd())
     config = load_json(CONFIG_PATH)
-    state = load_json(STATE_PATH)
+    state_path = get_state_path(cwd, config)
+    state = load_json(state_path)
 
     # Import scripts after path setup
     from brain import run as brain_run
