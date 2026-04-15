@@ -12,7 +12,8 @@
   },
   "license": "MIT",
   "bin": {
-    "ward-bootstrap": "scripts/postinstall.js"
+    "ward-bootstrap": "scripts/postinstall.js",
+    "ward-init": "scripts/ward-init.js"
   },
   "keywords": [
     "claude",

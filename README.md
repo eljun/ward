@@ -96,19 +96,19 @@ Ward will use this name when speaking to you.
 From inside a project you want WARD to track:
 
 ```bash
-python3 /path/to/ward/scripts/init_project.py
+ward-init
 ```
 
-If you are already inside the WARD repo and want to register another project:
+You can override the inferred defaults:
 
 ```bash
-python3 scripts/init_project.py --cwd /absolute/path/to/project
+ward-init --name "My Project" --tasks docs/TASKS.md
 ```
 
-You can also override the inferred defaults:
+To register a project from a different directory:
 
 ```bash
-python3 scripts/init_project.py --name "My Project" --tasks docs/TASKS.md
+ward-init --cwd /absolute/path/to/project
 ```
 
 This writes the current project entry into `~/.ward/config.json` so you do not have to edit the global config manually.
@@ -252,7 +252,7 @@ What these do:
 
 You can register projects automatically with:
 ```bash
-python3 scripts/init_project.py
+ward-init
 ```
 
 Or edit `~/.ward/config.json` manually:
