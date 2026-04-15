@@ -4,6 +4,17 @@
   "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM",
   "elevenlabs_model": "eleven_turbo_v2",
   "persona_name": "Jun",
+  "brain_provider": "openai",
+  "brain_model": "gpt-5.4-nano",
+  "brain_models": {},
+  "proactive": {
+    "enabled": true,
+    "cooldown_seconds": 90,
+    "long_response_chars": 900,
+    "min_response_chars": 140,
+    "significant_file_count": 3,
+    "max_recent_ward_lines": 5
+  },
   "speak_on": ["session_start", "errors", "session_end"],
   "projects": {}
 }

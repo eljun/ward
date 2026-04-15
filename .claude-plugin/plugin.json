@@ -1,7 +1,7 @@
 {
   "name": "ward",
-  "description": "WARD — Workspace Aware Recap Daemon. A peer developer voice presence for Claude Code. Ward greets you, recaps your last session, reacts to errors, and wraps up when you're done.",
-  "version": "1.0.0",
+  "description": "WARD — Workspace Aware Recap Daemon. A peer developer voice presence for Claude Code. Ward greets you, recaps your last session, reacts to errors, comments on meaningful turns, and wraps up when you're done.",
+  "version": "1.1.0",
   "author": {
     "name": "Eleazar G. Junsan",
     "url": "https://github.com/eljun"

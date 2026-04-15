@@ -26,30 +26,9 @@ SCRIPTS_DIR = os.path.join(REPO_DIR, "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 
 WARD_DIR = os.path.expanduser("~/.ward")
-CONFIG_PATH = os.path.join(WARD_DIR, "config.json")
 
 # Max transcript lines to send — keep costs low
 MAX_TRANSCRIPT_LINES = 60
-
-
-def load_json(path: str) -> dict:
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def get_state_path(cwd: str, config: dict) -> str:
-    """Return per-project state path, falling back to global state.json."""
-    project_config = config.get("projects", {}).get(cwd, {})
-    project_name = project_config.get("project_name", "")
-    if project_name:
-        safe_name = project_name.lower().replace(" ", "_").replace("-", "_")
-        states_dir = os.path.join(WARD_DIR, "states")
-        os.makedirs(states_dir, exist_ok=True)
-        return os.path.join(states_dir, f"{safe_name}.json")
-    return os.path.join(WARD_DIR, "state.json")
 
 
 def read_transcript(path: str) -> list[dict]:
@@ -69,14 +48,6 @@ def read_transcript(path: str) -> list[dict]:
     except Exception:
         pass
     return lines[-MAX_TRANSCRIPT_LINES:]
-
-
-def write_state(state: dict, path: str) -> None:
-    os.makedirs(WARD_DIR, exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(state, f, indent=2)
-
-
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
@@ -86,9 +57,10 @@ def main() -> None:
     transcript_path = payload.get("transcript_path", "")
     cwd = payload.get("cwd", os.getcwd())
 
-    config = load_json(CONFIG_PATH)
-    state_path = get_state_path(cwd, config)
-    current_state = load_json(state_path)
+    from state_store import load_config, load_state, merge_state, write_state
+
+    config = load_config()
+    state_path, current_state = load_state(cwd, config)
 
     # Enrich state with project info from config if available
     projects = config.get("projects", {})
@@ -117,13 +89,13 @@ def main() -> None:
     try:
         new_state = json.loads(raw_state)
         if isinstance(new_state, dict):
-            merged = {**current_state, **new_state, "last_active": date.today().isoformat()}
-            write_state(merged, state_path)
+            merged = merge_state(current_state, {**new_state, "last_active": date.today().isoformat()})
+            write_state(state_path, merged)
     except Exception as e:
         print(f"[ward] Could not parse state update from brain: {e}", file=sys.stderr)
         # Still stamp last_active so session_start knows we ran today
         current_state["last_active"] = date.today().isoformat()
-        write_state(current_state, state_path)
+        write_state(state_path, current_state)
 
     speak("Alright, wrapping up. I've saved your session summary.")
 

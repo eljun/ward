@@ -1,19 +1,30 @@
 # WARD — Workspace Aware Recap Daemon
-## Claude Code Plugin · Technical Specification v1.0.0
+## Claude Code Plugin · Technical Specification v1.1.0
 
 **Author:** Jun (Eleazar G. Junsan)
 **Created:** April 15, 2026
-**Status:** Ready for Implementation
+**Status:** Implemented and locally verified for the 1.1.0 release
 
 ---
 
 ## 1. Overview
 
-**WARD** (Workspace Aware Recap Daemon) is a Claude Code plugin that provides a peer developer voice presence during coding sessions. Its persona is **Ward** — a senior developer who rides shotgun while you work. Ward greets you at session start with a recap of your last session and top priorities, reacts to errors and blockers in real time, and wraps up the session with a written summary. Designed to feel like a real developer on a call — not a narrator, not a robot reading logs.
+**WARD** (Workspace Aware Recap Daemon) is a Claude Code plugin that provides a peer developer voice presence during coding sessions. Its persona is **Ward** — a senior developer who rides shotgun while you work. Ward greets you at session start with a recap of your last session and top priorities, reacts to tool failures, and can proactively comment after a turn when there is real signal. The target feel is a real developer on a call — not a narrator, not a robot reading hook events.
 
 **Name:** WARD — Workspace Aware Recap Daemon
 **Persona:** Ward
 **Design Philosophy:** Fail toward silence. Speak only when there is something worth saying. 1–2 sentences maximum per response.
+
+### 1.1 Architecture Direction
+
+WARD started as a hook-reactive companion: each hook event directly produced a spoken line. That design was simple but sounded robotic because the trigger itself became the content.
+
+The current architecture direction is **stateful and turn-aware**:
+- Hooks are signal sources, not scripts for what Ward should say
+- `post_response.py` inspects the latest user/assistant turn rather than a raw transcript tail
+- Local heuristics gate routine turns before any model call
+- The model returns a structured **decision** for proactive turns, not raw speech by default
+- `state.json` stores conversational memory so Ward can avoid repetition and preserve long replies for later summarization
 
 ---
 
@@ -26,15 +37,17 @@ ward/
 ├── hooks/
 │   ├── session_start.py             # Fires on SessionStart
 │   ├── post_tool_use.py             # Fires on PostToolUseFailure
+│   ├── post_response.py             # Fires on Stop; proactive turn review
 │   └── session_end.py               # Fires on SessionEnd
 ├── scripts/
-│   ├── brain.py                     # Claude Haiku API caller
+│   ├── brain.py                     # Provider/model-configurable brain caller
+│   ├── state_store.py               # Shared config/state helpers
 │   └── speak.py                     # TTS dispatcher (macOS → ElevenLabs)
 ├── commands/
 │   └── recap.md                     # /recap slash command
 ├── persona.txt                      # Peer developer system prompt
-├── config.json                      # User preferences (voice, provider, projects)
-├── state.json                       # Hot session memory (written each session)
+├── config.json                      # User preferences (voice, brain, proactive settings, projects)
+├── state.json                       # Session + conversation memory
 ├── CHANGELOG.md                     # Version history
 └── README.md                        # Setup and usage instructions
 ```
@@ -48,8 +61,8 @@ ward/
 ```json
 {
   "name": "ward",
-  "description": "WARD — Workspace Aware Recap Daemon. A peer developer voice presence for Claude Code. Ward greets you, recaps your last session, reacts to errors, and wraps up when you're done.",
-  "version": "1.0.0",
+  "description": "WARD — Workspace Aware Recap Daemon. A peer developer voice presence for Claude Code. Ward greets you, recaps your last session, reacts to errors, comments on meaningful turns, and wraps up when you're done.",
+  "version": "1.1.0",
   "author": {
     "name": "Eleazar G. Junsan",
     "url": "https://github.com/eljun"
@@ -78,6 +91,20 @@ Stored at `~/.ward/config.json`. Created on first run if absent.
   "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM",
   "elevenlabs_model": "eleven_turbo_v2",
   "persona_name": "Dev",
+  "brain_provider": "openai",
+  "brain_model": "gpt-5.4-nano",
+  "brain_models": {
+    "post_response:decision": "gpt-5.4-nano",
+    "state": "gpt-5.4-mini"
+  },
+  "proactive": {
+    "enabled": true,
+    "cooldown_seconds": 90,
+    "long_response_chars": 900,
+    "min_response_chars": 140,
+    "significant_file_count": 3,
+    "max_recent_ward_lines": 5
+  },
   "speak_on": ["session_start", "errors", "session_end"],
   "projects": {
     "/Users/jun/projects/kwentalk": {
@@ -101,6 +128,10 @@ Stored at `~/.ward/config.json`. Created on first run if absent.
 | `elevenlabs_voice_id` | string | — | ElevenLabs voice ID from their voice library |
 | `elevenlabs_model` | string | `"eleven_turbo_v2"` | ElevenLabs model. Use turbo for speed |
 | `persona_name` | string | `"Dev"` | Your name — what Ward calls you. Substituted into `persona.txt` at runtime |
+| `brain_provider` | string | `"openai"` | `"openai"` or `"anthropic"` |
+| `brain_model` | string | `"gpt-5.4-nano"` | Base model used when no override matches |
+| `brain_models` | object | `{}` | Per-event or per-mode model overrides. Resolution order: `event:mode` → `event` → `mode` → `default` → `brain_model` |
+| `proactive` | object | see above | Local gating knobs for proactive turn review |
 | `speak_on` | array | see above | Which events trigger voice |
 | `projects` | object | `{}` | Per-project config keyed by absolute path |
 
@@ -109,17 +140,20 @@ Stored at `~/.ward/config.json`. Created on first run if absent.
 Set in `~/.zshrc` or `~/.zprofile`:
 
 ```bash
-export WARD_ANTHROPIC_API_KEY="sk-ant-..." # Preferred — avoids conflict with Claude Code's own auth
+export WARD_OPENAI_API_KEY="sk-..."        # Preferred for the default OpenAI setup
+export OPENAI_API_KEY="sk-..."             # Also works if WARD_OPENAI_API_KEY is not set
+export WARD_ANTHROPIC_API_KEY="sk-ant-..." # Optional if using Anthropic instead
 export ANTHROPIC_API_KEY="sk-ant-..."      # Also works if WARD_ANTHROPIC_API_KEY is not set
 export ELEVENLABS_API_KEY="..."            # Optional — only if tts_provider is elevenlabs
 ```
 
-> If you use Claude Code via claude.ai login, set `WARD_ANTHROPIC_API_KEY` instead of
-> `ANTHROPIC_API_KEY` to avoid the "auth conflict" warning. Both point to the same key value.
+> If you use Anthropic via Claude Code login, set `WARD_ANTHROPIC_API_KEY` instead of
+> `ANTHROPIC_API_KEY` to avoid the auth conflict warning. For OpenAI, prefer `WARD_OPENAI_API_KEY`
+> to keep WARD isolated from other tools in your shell environment.
 
 ### 4.3 state.json
 
-Stored at `~/.ward/state.json`. Written by `session_end.py` and `/recap`. Read by `session_start.py`.
+Stored at `~/.ward/state.json` or `~/.ward/states/{project}.json`. Written by `session_end.py`, `post_response.py`, and `/recap`. Read by `session_start.py`.
 
 ```json
 {
@@ -140,9 +174,27 @@ Stored at `~/.ward/state.json`. Written by `session_end.py` and `/recap`. Read b
   "last_summary": "Spent the session on V2 chat testing. Persistence ordering is clean. Guest recovery still planned.",
   "last_active": "2026-04-14",
   "project": "KwenTalk",
-  "tasks_md_path": "/Users/jun/projects/kwentalk/TASKS.md"
+  "tasks_md_path": "/Users/jun/projects/kwentalk/TASKS.md",
+  "recent_ward_lines": [
+    "I left the detailed breakdown in chat."
+  ],
+  "last_spoken_at": "2026-04-15T09:12:04Z",
+  "last_spoken_reason": "handoff",
+  "last_seen_turn_signature": "a12ab1518f60d980f06fa9b8254a0582149877b4",
+  "last_user_request": "Can you explain the proactive refactor plan?",
+  "last_assistant_response": "Here’s the full proactive refactor plan...",
+  "last_long_response": "Here’s the full proactive refactor plan...",
+  "summary_offer_available": true
 }
 ```
+
+### 4.4 State Model Notes
+
+`state.json` now carries two kinds of memory:
+- **Session memory:** current task, priorities, pending PRs, last summary
+- **Conversation memory:** recent Ward lines, the last user/assistant turn, the last long response, and proactive cooldown metadata
+
+This is what allows Ward to stay concise, avoid saying the same thing twice, and later summarize a long assistant answer if the user asks.
 
 ---
 
@@ -205,7 +257,51 @@ Error: {tool_error}
 
 ---
 
-### 5.3 session_end.py
+### 5.3 post_response.py
+
+**Trigger:** `Stop` — fires after each completed Claude response.
+
+**Behavior:**
+1. Read the recent transcript window
+2. Extract the latest user/assistant turn
+3. Apply strict local gating before any model call
+4. If the turn is routine → update memory only, stay silent
+5. If the turn is meaningful → call `brain.py` with `mode="decision"`
+6. Parse the structured decision JSON
+7. Update conversation memory in `state.json`
+8. Speak only if the decision says to speak
+
+**Local gate intent:**
+- Stay silent on routine reads, tiny edits, and status-only turns
+- Detect meaningful signals such as risky changes, multi-file implementation turns, completions, and long replies
+- Enforce cooldown so Ward does not comment on every consecutive turn
+
+**Brain decision context sent:**
+```
+Event: post_response
+User request: {last user text}
+Assistant response: {last assistant text}
+Tools: {tool summary}
+Signals: {local signal tags}
+Recent Ward lines: {recent_ward_lines}
+Last spoken reason: {last_spoken_reason}
+```
+
+**Expected decision payload:**
+```json
+{
+  "should_speak": true,
+  "reason": "handoff",
+  "speech": "I left the detailed breakdown in chat.",
+  "summary_offer_available": true
+}
+```
+
+**Design rule:** For long assistant replies, Ward should give a short handoff, not read the whole answer aloud. Full summarization is deferred until the user explicitly asks for it.
+
+---
+
+### 5.4 session_end.py
 
 **Trigger:** `SessionEnd` — fires when Claude Code exits.
 
@@ -234,47 +330,45 @@ Instruction: Update state.json fields. Return JSON only.
 
 ### 6.1 brain.py
 
-Single-responsibility: receive event context, call Claude Haiku API, return speech text or updated state JSON.
+Single-responsibility: receive event context, call the configured provider/model, return spoken text or JSON payloads for state/decision flows.
 
 ```python
 # Signature
 def run(event: str, context: dict, mode: str = "speak") -> str:
     """
-    event: session_start | tool_error | session_end | recap
+    event: session_start | tool_error | session_end | recap | post_response
     context: dict of relevant fields per event type
-    mode: "speak" returns 1-2 sentence string | "state" returns JSON string
+    mode: "speak" returns 1-2 sentence string
+    mode: "decision" returns JSON string
+    mode: "state" returns JSON string
     """
 ```
 
-**API Call:**
+**Provider resolution:**
 ```python
-import anthropic, os, json
+provider, model = resolve_from_config(event, mode)
 
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-
-def run(event, context, mode="speak"):
-    config = json.load(open(os.path.expanduser("~/.ward/config.json")))
-    persona_name = config.get("persona_name", "Dev")
-    persona = open(os.path.expanduser("~/.ward/persona.txt")).read()
-    persona = persona.replace("{persona_name}", persona_name)
-    
-    user_message = f"Event: {event}\nContext: {json.dumps(context)}\nMode: {mode}"
-    
-    response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=150 if mode == "speak" else 500,
-        system=persona,
-        messages=[{"role": "user", "content": user_message}]
-    )
-    
-    return response.content[0].text
+if provider == "openai":
+    # OpenAI Responses API
+    ...
+elif provider == "anthropic":
+    # Anthropic Messages API
+    ...
 ```
 
-**Cost note:** Haiku at $0.0008/1K input tokens. A full session (4–6 hook fires) costs under $0.01.
+**Current default:** `openai / gpt-5.4-nano`
+
+**Recommended split:**
+- `post_response:decision` → cheap fast model such as `gpt-5.4-nano`
+- `state` → stronger small model such as `gpt-5.4-mini`
+
+### 6.2 state_store.py
+
+Single-responsibility: shared config/state helpers used by hooks so all state reads/writes go through the same schema and per-project path resolution.
 
 ---
 
-### 6.2 speak.py
+### 6.3 speak.py
 
 Single-responsibility: receive text string, speak it using configured provider.
 
@@ -341,6 +435,12 @@ Your job:
 - NEVER repeat something you said in the last 3 responses.
 - Keep every response to 1–2 sentences maximum.
 - Speak only when there is something worth saying.
+- Default to silence when the turn is routine.
+
+When mode is "decision":
+- Return only valid JSON.
+- Decide whether Ward should speak after a proactive turn.
+- For long replies, prefer a short handoff instead of reading the answer aloud.
 
 When mode is "speak":
 - Return only the spoken text. No quotes, no labels, no markdown.
@@ -384,15 +484,28 @@ Example spoken output after recap:
 
 ## 9. Version Tracking
 
+**Important:** `plugin.json` is the canonical version. `CHANGELOG.md`, `README.md`, and this spec should be updated alongside it on every release.
+
 **File:** `CHANGELOG.md`
 
 ```markdown
 # Changelog
 
-All notable changes to Voice Companion are tracked here.
+All notable changes to WARD are tracked here.
 Format: [version] — date — description
 
 ---
+
+## [1.1.0] — 2026-04-15
+
+### Proactive Refactor Release
+- Added `post_response.py` proactive turn review on `Stop`
+- Shifted WARD from hook narration toward turn-aware, stateful commentary
+- Added local gating and cooldowns so routine turns stay silent
+- Added conversation memory to `state.json`
+- Added structured `decision` mode in `brain.py`
+- Added provider/model configurability and switched the default brain to `openai / gpt-5.4-nano`
+- Updated `WARD_SPEC.md` and `README.md` to reflect the proactive architecture
 
 ## [1.0.0] — 2026-04-15
 
@@ -402,7 +515,7 @@ Format: [version] — date — description
 - PostToolUse hook — speaks on tool errors only, silent otherwise
 - SessionStop hook — summarizes session, writes state.json
 - /recap command — parses tasks.md active sections, updates state.json
-- brain.py — Claude Haiku API caller with Ward peer persona
+- brain.py — model caller with Ward peer persona
 - speak.py — macOS say → ElevenLabs fallback chain
 - persona.txt — Ward persona system prompt, Jun-specific context
 - config.json — per-project tasks_md_path, voice provider settings
@@ -425,7 +538,7 @@ Version field in `plugin.json` is the canonical version. `CHANGELOG.md` is the h
 
 A peer developer voice presence for Claude Code.
 **Ward** greets you at session start, recaps your last session, reacts to errors,
-and wraps up when you're done.
+and can proactively comment after meaningful turns.
 
 > WARD — **W**orkspace **A**ware **R**ecap **D**aemon
 
@@ -437,11 +550,11 @@ claude plugin install github.com/eljun/ward
 
 ## First-Time Setup
 
-### 1. Set your Anthropic API key (required)
+### 1. Set your AI provider key (required)
 
 Add to ~/.zshrc or ~/.zprofile:
 \```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
+export WARD_OPENAI_API_KEY="sk-..."
 \```
 
 ### 2. Choose your voice
@@ -497,6 +610,7 @@ Ward runs automatically — no commands needed for daily use.
 |---|---|
 | Open Claude Code | Ward recaps your last session and top priorities |
 | Tool error occurs | Ward reacts briefly |
+| After a meaningful turn | Ward may give a short confirmation, risk flag, or handoff |
 | Close Claude Code | Ward saves a session summary to state.json |
 
 ### Manual Commands
@@ -537,13 +651,12 @@ working style preferences, or tone adjustments.
 
 ## Cost
 
-Ward uses Claude Haiku for all AI calls.
-A full day of sessions (6–10 hook fires) costs under $0.05.
+Ward can use OpenAI or Anthropic for AI calls. Cost depends on the configured provider and model.
 ElevenLabs Turbo v2 is approximately $0.0003 per spoken line.
 
 ## Version
 
-Current version: 1.0.0
+Current version: 1.1.0
 See CHANGELOG.md for full version history.
 ```
 
@@ -557,7 +670,7 @@ When building this plugin, follow this order:
 2. Write `plugin.json` manifest first — Claude Code reads this on install
 3. Write `speak.py` and test with `python3 speak.py "test"` before wiring hooks
 4. Write `brain.py` and test standalone with a mock context dict
-5. Write hooks in order: `session_start.py` → `session_end.py` → `post_tool_use.py`
+5. Write hooks in order: `session_start.py` → `post_tool_use.py` → `post_response.py` → `session_end.py`
 6. Write `persona.txt` — treat this as a first-class deliverable, not boilerplate
 7. Write `recap.md` command
 8. Create default `config.json` and `state.json` templates
@@ -567,7 +680,7 @@ When building this plugin, follow this order:
 **Python dependencies required:**
 ```
 anthropic>=0.25.0
-requests>=2.31.0
+openai>=1.0.0
 ```
 
 Add a `requirements.txt` at plugin root. Hooks must install deps on first run if absent:
@@ -613,6 +726,14 @@ All hooks receive a JSON payload via stdin. Key fields:
   "transcript_path": "/path/to/transcript.jsonl",
   "cwd": "/path/to/project",
   "reason": "clear|resume|logout|prompt_input_exit|bypass_permissions_disabled|other"
+}
+
+// Stop  ← proactive turn review
+{
+  "hook_event_name": "Stop",
+  "session_id": "...",
+  "transcript_path": "/path/to/transcript.jsonl",
+  "cwd": "/path/to/project"
 }
 ```
 

@@ -5,6 +5,20 @@ Format: [version] — date — description
 
 ---
 
+## [1.1.0] — 2026-04-15
+
+### Proactive Refactor Release
+- Added `post_response.py` proactive turn review on `Stop`
+- Shifted WARD from hook narration toward turn-aware, stateful commentary
+- Added local gating and cooldowns so routine turns stay silent
+- Added conversation memory to `state.json` for recent Ward lines, last turn context, and long-response handoffs
+- Added structured `decision` mode in `brain.py` for proactive speak/no-speak decisions
+- Added shared `state_store.py` helpers for per-project state reads/writes
+- Added provider/model configurability in `brain.py`
+- Switched the default brain to `openai / gpt-5.4-nano`
+- Added OpenAI dependency and updated setup docs
+- Updated `WARD_SPEC.md` and `README.md` to reflect the proactive architecture
+
 ## [1.0.0] — 2026-04-15
 
 ### Initial Release — WARD (Workspace Aware Recap Daemon)

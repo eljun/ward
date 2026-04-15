@@ -6,5 +6,13 @@
   "last_summary": "",
   "last_active": "",
   "project": "",
-  "tasks_md_path": ""
+  "tasks_md_path": "",
+  "recent_ward_lines": [],
+  "last_spoken_at": "",
+  "last_spoken_reason": "",
+  "last_seen_turn_signature": "",
+  "last_user_request": "",
+  "last_assistant_response": "",
+  "last_long_response": "",
+  "summary_offer_available": false
 }
