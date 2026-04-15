@@ -209,9 +209,35 @@ def run(event: str, context: dict, mode: str = "speak") -> str:
     """
     config = load_config()
     persona = load_persona(config)
-    user_message = f"Event: {event}\nContext: {json.dumps(context)}\nMode: {mode}"
+
+    schema_hint = ""
+    if mode == "state":
+        schema_hint = (
+            "\n\nFill in ONLY these exact fields from the conversation above. "
+            "Replace each placeholder with the real value. No other keys. No prose. Return valid JSON only:\n"
+            '{\n'
+            '  "current_task": "<main task being worked on, or empty string if unclear>",\n'
+            '  "top_priorities": ["<highest priority item>"],\n'
+            '  "recent_completions": ["<what was completed this session>"],\n'
+            '  "pending_prs": [],\n'
+            '  "last_summary": "<one sentence: what was worked on and current status>",\n'
+            '  "project": "<project name>"\n'
+            '}'
+        )
+    elif mode == "decision":
+        schema_hint = (
+            "\n\nFill in ONLY these exact fields. No other keys. No prose. Return valid JSON only:\n"
+            '{\n'
+            '  "should_speak": false,\n'
+            '  "reason": "<risk|completion|handoff|nudge|silence>",\n'
+            '  "speech": "<one short sentence or empty string>",\n'
+            '  "summary_offer_available": false\n'
+            '}'
+        )
+
+    user_message = f"Event: {event}\nContext: {json.dumps(context)}\nMode: {mode}{schema_hint}"
     provider, model = _resolve_provider_and_model(config, event, mode)
-    max_tokens_by_mode = {"speak": 150, "summary": 280, "decision": 240, "state": 700}
+    max_tokens_by_mode = {"speak": 150, "summary": 280, "decision": 240, "state": 1200}
     max_tokens = max_tokens_by_mode.get(mode, 200)
 
     if provider == "anthropic":

@@ -37,7 +37,7 @@ def main() -> None:
         payload = {}
 
     cwd = payload.get("cwd", os.getcwd())
-    from state_store import load_config, load_state
+    from state_store import find_project_config, load_config, load_state
 
     config = load_config()
     _, state = load_state(cwd, config)
@@ -54,8 +54,7 @@ def main() -> None:
         return
 
     # Look up project config
-    projects = config.get("projects", {})
-    project_config = projects.get(cwd, {})
+    _, project_config = find_project_config(cwd, config)
     project_name = project_config.get("project_name") or state.get("project", "")
 
     last_active = state.get("last_active", "")

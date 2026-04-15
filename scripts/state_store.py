@@ -49,8 +49,27 @@ def ensure_state_shape(state: Optional[dict]) -> dict:
     return {**STATE_DEFAULTS, **state}
 
 
+def find_project_config(cwd: str, config: dict) -> tuple[str, dict]:
+    projects = config.get("projects", {}) or {}
+    if not projects:
+        return "", {}
+
+    cwd_real = os.path.realpath(cwd)
+    best_root = ""
+    best_config = {}
+
+    for root, project_config in projects.items():
+        root_real = os.path.realpath(root)
+        if cwd_real == root_real or cwd_real.startswith(root_real + os.sep):
+            if len(root_real) > len(best_root):
+                best_root = root_real
+                best_config = project_config if isinstance(project_config, dict) else {}
+
+    return best_root, best_config
+
+
 def get_state_path(cwd: str, config: dict) -> str:
-    project_config = config.get("projects", {}).get(cwd, {})
+    _, project_config = find_project_config(cwd, config)
     project_name = project_config.get("project_name", "")
     if project_name:
         safe_name = project_name.lower().replace(" ", "_").replace("-", "_")

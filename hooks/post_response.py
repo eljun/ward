@@ -27,7 +27,7 @@ DEFAULT_PROACTIVE = {
     "significant_file_count": 3,
     "max_recent_ward_lines": 5,
 }
-MAX_LINES = 40
+MAX_LINES = 200
 INTERESTING_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"}
 RISKY_KEYWORDS = (
     "migration",
@@ -115,6 +115,15 @@ def _entry_blocks(entry: dict) -> list[dict]:
     return []
 
 
+def _is_human_turn(entry: dict) -> bool:
+    """Return True only for actual human messages, not tool result callbacks."""
+    if _entry_role(entry) != "user":
+        return False
+    blocks = _entry_blocks(entry)
+    # Tool result callbacks have tool_result blocks; human messages have text or are empty
+    return not any(b.get("type") == "tool_result" for b in blocks)
+
+
 def _entry_text(entry: dict) -> str:
     parts = []
     for block in _entry_blocks(entry):
@@ -145,13 +154,14 @@ def collect_latest_turn(entries: list[dict]) -> dict:
     if assistant_index is None:
         return {}
 
-    user_index = None
+    # Walk back to the actual human message, skipping tool result callbacks
+    human_index = None
     for idx in range(assistant_index - 1, -1, -1):
-        if _entry_role(entries[idx]) == "user":
-            user_index = idx
+        if _is_human_turn(entries[idx]):
+            human_index = idx
             break
 
-    start = user_index if user_index is not None else assistant_index
+    start = human_index if human_index is not None else assistant_index
     window = entries[start : assistant_index + 1]
 
     user_text = ""
@@ -162,7 +172,7 @@ def collect_latest_turn(entries: list[dict]) -> dict:
 
     for entry in window:
         role = _entry_role(entry)
-        if role == "user" and not user_text:
+        if _is_human_turn(entry) and not user_text:
             user_text = _entry_text(entry)
 
         for block in _entry_blocks(entry):
@@ -319,11 +329,11 @@ def main() -> None:
 
     from brain import run as brain_run
     from speak import speak
-    from state_store import load_config, load_state, merge_state, write_state
+    from state_store import find_project_config, load_config, load_state, merge_state, write_state
 
     config = load_config()
     state_path, state = load_state(cwd, config)
-    project_config = config.get("projects", {}).get(cwd, {})
+    _, project_config = find_project_config(cwd, config)
     project_name = project_config.get("project_name") or state.get("project", "")
 
     entries = read_recent_transcript(transcript_path)

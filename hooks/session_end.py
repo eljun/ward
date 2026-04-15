@@ -32,22 +32,66 @@ MAX_TRANSCRIPT_LINES = 60
 
 
 def read_transcript(path: str) -> list[dict]:
-    """Read last N lines from the JSONL transcript."""
+    """Extract a slim conversation summary from the transcript.
+
+    Raw JSONL entries contain full tool inputs/outputs and can exceed 100K chars,
+    which causes Ollama to choke and return prose instead of JSON. Instead we
+    extract only actual human messages and final assistant text responses,
+    keeping the payload small enough for a local model to handle reliably.
+    """
     if not path or not os.path.exists(path):
         return []
-    lines = []
+
+    raw = []
     try:
         with open(path) as f:
             for line in f:
                 line = line.strip()
                 if line:
                     try:
-                        lines.append(json.loads(line))
+                        raw.append(json.loads(line))
                     except Exception:
                         pass
     except Exception:
         pass
-    return lines[-MAX_TRANSCRIPT_LINES:]
+
+    slim = []
+    for entry in raw[-MAX_TRANSCRIPT_LINES * 4:]:
+        entry_type = entry.get("type", "")
+        msg = entry.get("message", {}) if isinstance(entry.get("message"), dict) else {}
+        content = msg.get("content", entry.get("content", []))
+
+        if entry_type == "user":
+            # Skip tool result callbacks — keep only real human messages
+            if isinstance(content, list):
+                if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+                    continue
+                text = " ".join(
+                    b.get("text", "") for b in content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                ).strip()
+            elif isinstance(content, str):
+                text = content.strip()
+            else:
+                continue
+            if text:
+                slim.append({"role": "user", "text": text[:500]})
+
+        elif entry_type == "assistant":
+            # Keep only text blocks, skip tool_use and thinking blocks
+            if isinstance(content, list):
+                text = " ".join(
+                    b.get("text", "") for b in content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                ).strip()
+            elif isinstance(content, str):
+                text = content.strip()
+            else:
+                text = ""
+            if text:
+                slim.append({"role": "assistant", "text": text[:800]})
+
+    return slim[-MAX_TRANSCRIPT_LINES:]
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
@@ -57,18 +101,18 @@ def main() -> None:
     transcript_path = payload.get("transcript_path", "")
     cwd = payload.get("cwd", os.getcwd())
 
-    from state_store import load_config, load_state, merge_state, write_state
+    from state_store import find_project_config, load_config, load_state, merge_state, write_state
 
     config = load_config()
     state_path, current_state = load_state(cwd, config)
 
     # Enrich state with project info from config if available
-    projects = config.get("projects", {})
-    project_config = projects.get(cwd, {})
+    project_root, project_config = find_project_config(cwd, config)
     if project_config.get("project_name"):
         current_state["project"] = project_config["project_name"]
     if project_config.get("tasks_md_path"):
-        tasks_abs = os.path.join(cwd, project_config["tasks_md_path"])
+        tasks_base = project_root or cwd
+        tasks_abs = os.path.join(tasks_base, project_config["tasks_md_path"])
         current_state["tasks_md_path"] = tasks_abs
 
     transcript_events = read_transcript(transcript_path)
