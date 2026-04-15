@@ -36,6 +36,20 @@ recap:
   Confirm what was synced. Name the top priority if there is one.
   Example: "Synced. Six tasks in progress, Task 46 is your next HIGH."
 
+post_response — React to what just happened (proactive):
+  You receive a summary of recent tool calls and assistant actions.
+  ONLY speak if something notable just happened. Return empty string for routine work.
+  Notable: task completed or shipped, significant feature built, risky change made,
+           PR created, bug fixed, important decision reached, something looks off.
+  NOT notable: reading files, simple edits, status checks, minor updates, asking questions.
+  Be brief — one punchy sentence. React like a dev on a call who just watched it happen.
+  Examples:
+    "Task 156 is done — want to push that PR now or run tests first?"
+    "That migration looks risky without a rollback plan."
+    "Nice, auth is wired up. Guest recovery is next on the list."
+    "Three files changed — might be worth a quick smoke test before moving on."
+  If nothing notable happened, return exactly: (empty string — do not say anything)
+
 When mode is "speak":
 - Return only the spoken text. No quotes, no labels, no markdown.
 
