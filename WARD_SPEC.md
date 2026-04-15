@@ -44,7 +44,8 @@ ward/
 │   ├── state_store.py               # Shared config/state helpers
 │   └── speak.py                     # TTS dispatcher (macOS → ElevenLabs)
 ├── commands/
-│   └── recap.md                     # /recap slash command
+│   ├── recap.md                     # /recap slash command
+│   └── summary.md                   # /summary slash command
 ├── persona.txt                      # Peer developer system prompt
 ├── config.json                      # User preferences (voice, brain, proactive settings, projects)
 ├── state.json                       # Session + conversation memory
@@ -360,6 +361,7 @@ elif provider == "anthropic":
 
 **Recommended split:**
 - `post_response:decision` → cheap fast model such as `gpt-5.4-nano`
+- `summary_request:summary` → stronger small model such as `gpt-5.4-mini`
 - `state` → stronger small model such as `gpt-5.4-mini`
 
 ### 6.2 state_store.py
@@ -455,7 +457,9 @@ Silence is better than noise. When in doubt, say nothing.
 
 ---
 
-## 8. The /recap Command
+## 8. Commands
+
+### 8.1 The /recap Command
 
 **File:** `commands/recap.md`
 
@@ -479,6 +483,30 @@ If /recap is run with the argument "full", read the entire tasks file instead of
 Example spoken output after recap:
 "Synced. You've got six tasks in progress, Task 146 is your next HIGH priority, and two PRs still waiting to merge."
 ```
+
+### 8.2 The /summary Command
+
+**File:** `commands/summary.md`
+
+```markdown
+---
+description: Ask Ward to summarize the last long response he saved for later.
+---
+
+Ward stores the last long assistant response in state when he gives a short handoff instead of reading it aloud.
+
+Steps:
+1. Determine the WARD repo root from the location of this command file.
+2. Run `python3 {ward_repo}/scripts/summary_request.py` from the current working directory.
+3. If Ward says there is nothing queued for summary, tell the user no long response is currently stored.
+```
+
+**Behavior:**
+- Reads the current project's WARD state file
+- Uses `last_long_response` as the source material
+- Calls `brain.py` with `event="summary_request"` and `mode="summary"`
+- Speaks the compact summary through `speak.py`
+- Clears `summary_offer_available` after a successful summary request
 
 ---
 

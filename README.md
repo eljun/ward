@@ -81,6 +81,7 @@ Resolution order is:
 
 For WARD's current behavior, a practical split is:
 - `post_response:decision` → `gpt-5.4-nano`
+- `summary_request:summary` → `gpt-5.4-mini`
 - `state` → `gpt-5.4-mini`
 
 `post_response:decision` is the proactive turn-review path.
@@ -186,9 +187,11 @@ Proactive behavior is gated hard before the model is called:
 ```
 /recap         — Re-sync Ward from your tasks file (active sections only)
 /recap full    — Re-sync Ward from your full tasks file
+/summary       — Ask Ward to summarize the last long reply he saved for later
 ```
 
 Run `/recap` any time your priorities shift mid-session or at the start of a new week.
+Run `/summary` after Ward says he left the detailed breakdown in chat and you want the spoken version.
 
 ## Troubleshooting
 

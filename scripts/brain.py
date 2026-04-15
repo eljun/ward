@@ -148,9 +148,10 @@ def _call_openai(persona: str, user_message: str, model: str, max_tokens: int) -
 
 def run(event: str, context: dict, mode: str = "speak") -> str:
     """
-    event: session_start | tool_error | session_end | recap | post_response
+    event: session_start | tool_error | session_end | recap | post_response | summary_request
     context: dict of relevant fields per event type
     mode: "speak" returns 1-2 sentence string
+          "summary" returns spoken summary text
           "state" returns JSON string
           "decision" returns JSON string
     """
@@ -158,7 +159,7 @@ def run(event: str, context: dict, mode: str = "speak") -> str:
     persona = load_persona(config)
     user_message = f"Event: {event}\nContext: {json.dumps(context)}\nMode: {mode}"
     provider, model = _resolve_provider_and_model(config, event, mode)
-    max_tokens_by_mode = {"speak": 150, "decision": 240, "state": 700}
+    max_tokens_by_mode = {"speak": 150, "summary": 280, "decision": 240, "state": 700}
     max_tokens = max_tokens_by_mode.get(mode, 200)
 
     if provider == "anthropic":
