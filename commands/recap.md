@@ -10,7 +10,10 @@ Steps:
 3. Resolve tasks_md_path relative to the project root (the cwd key in config).
 4. If the argument "full" was passed, read the entire tasks file. Otherwise extract ONLY these sections: "## In Progress", "## Planned", "## Ready to Ship", "## Known Issues".
 5. Run: python3 {ward_repo}/scripts/brain.py with event="recap", the extracted content in context, and mode="state" to generate updated state.json fields.
-6. Write the returned JSON to ~/.ward/state.json (merge with existing state, always update last_active to today).
+6. Determine the correct state file path:
+   - If the current working directory matches a project in ~/.ward/config.json, write to ~/.ward/states/{safe_project_name}.json (lowercase, spaces to underscores).
+   - Otherwise write to ~/.ward/state.json.
+   Merge with existing state, always update last_active to today.
 7. Run: python3 {ward_repo}/scripts/speak.py with a 1-2 sentence spoken summary of what was found — top priority, tasks in progress count, pending PRs if any.
 
 Where {ward_repo} is the directory containing this commands/ folder.
