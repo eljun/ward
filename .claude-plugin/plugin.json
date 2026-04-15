@@ -1,0 +1,15 @@
+{
+  "name": "ward",
+  "description": "WARD — Workspace Aware Recap Daemon. A peer developer voice presence for Claude Code. Ward greets you, recaps your last session, reacts to errors, and wraps up when you're done.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Eleazar G. Junsan",
+    "url": "https://github.com/eljun"
+  },
+  "repository": "https://github.com/eljun/ward",
+  "license": "MIT",
+  "requires": {
+    "claude_code": ">=2.1.0",
+    "python": ">=3.9"
+  }
+}

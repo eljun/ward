@@ -1,0 +1,9 @@
+{
+  "tts_provider": "macos",
+  "macos_voice": "Joelle (Enhanced)",
+  "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM",
+  "elevenlabs_model": "eleven_turbo_v2",
+  "persona_name": "Jun",
+  "speak_on": ["session_start", "errors", "session_end"],
+  "projects": {}
+}
