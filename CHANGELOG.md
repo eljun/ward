@@ -5,6 +5,15 @@ Format: [version] — date — description
 
 ---
 
+## [1.3.0] — 2026-04-15
+
+### Ollama-First Defaults Release
+- Switched the default WARD brain to local `ollama / gemma4:e4b`
+- Updated the bootstrap seed config to use `gemma4:e4b` as the primary model
+- Expanded install docs to cover Ollama setup, model pull/check, bootstrap, and project registration
+- Clarified OpenAI and Anthropic as optional alternatives or targeted overrides
+- Updated the technical spec to match the Ollama-first install and runtime model
+
 ## [1.2.0] — 2026-04-15
 
 ### Local + Onboarding Release

@@ -17,10 +17,42 @@ WARD is currently:
 - globally installed
 - globally configured under `~/.ward`
 - project-aware at runtime through the `projects` map in `~/.ward/config.json`
+- Ollama-first by default, using local `gemma4:e4b`
 
 That means you install WARD once, then point it at one or more projects.
 
-### Bootstrap WARD Home
+## Primary Brain
+
+WARD now defaults to:
+- `brain_provider: "ollama"`
+- `brain_model: "gemma4:e4b"`
+- `ollama_think: false`
+
+That keeps the common proactive path local, fast, and free to run. OpenAI and Anthropic are still supported, but they are now optional overrides rather than the default install path.
+
+## Setup
+
+### 1. Install Ollama And The Primary Model
+
+Install and launch Ollama on your machine, then make sure the daemon is available:
+
+```bash
+ollama list
+```
+
+If `gemma4:e4b` is not present yet, pull it:
+
+```bash
+ollama pull gemma4:e4b
+```
+
+WARD expects Ollama on the default local endpoint:
+
+```text
+http://127.0.0.1:11434
+```
+
+### 2. Bootstrap WARD Home
 
 After installing the plugin, initialize WARD's home directory:
 
@@ -46,7 +78,17 @@ Existing files are preserved. Use `--force` only if you explicitly want to overw
 python3 scripts/bootstrap.py --force
 ```
 
-### Register A Project
+### 3. Set Your Name
+
+Edit `~/.ward/config.json`:
+
+```json
+{ "persona_name": "YourName" }
+```
+
+Ward will use this name when speaking to you.
+
+### 4. Register A Project
 
 From inside a project you want WARD to track:
 
@@ -68,54 +110,52 @@ python3 scripts/init_project.py --name "My Project" --tasks docs/TASKS.md
 
 This writes the current project entry into `~/.ward/config.json` so you do not have to edit the global config manually.
 
-## First-Time Setup
+### 5. Choose Your Voice
 
-### 1. Set your AI provider key (required)
+**Option A — macOS voices (default)**
+
+Ward uses `Joelle (Enhanced)` by default. This voice is not installed on macOS by default — install it first:
+
+1. Open **System Settings → Accessibility → Spoken Content**
+2. Click the **System Voice** dropdown → **Manage Voices...**
+3. Find **Joelle (Enhanced)** under English and click the download icon
+4. Wait for the download to complete
+
+To use a different voice instead, list what's installed:
+```bash
+say -v ?
+```
+Then update `~/.ward/config.json`:
+```json
+{
+  "macos_voice": "Zoe"
+}
+```
+
+**Option B — ElevenLabs (recommended for best quality)**
 
 Add to `~/.zshrc` or `~/.zprofile`:
 ```bash
-export WARD_ANTHROPIC_API_KEY="sk-ant-..."
+export ELEVENLABS_API_KEY="your-key-here"
 ```
-
-> Use `WARD_ANTHROPIC_API_KEY` if you authenticate Claude Code via claude.ai — this avoids
-> an auth conflict warning. `ANTHROPIC_API_KEY` also works if you prefer API key auth for everything.
-
-Or use OpenAI instead:
-```bash
-export WARD_OPENAI_API_KEY="sk-..."
-```
-
-`OPENAI_API_KEY` also works if you already use that name elsewhere.
-
-### 2. Set your name
-
-Edit `~/.ward/config.json`:
-```json
-{ "persona_name": "YourName" }
-```
-Ward will use this name when speaking to you.
-
-### 3. Choose your brain model
-
-WARD can use OpenAI, Anthropic, or a local Ollama model for text generation.
-
-OpenAI default:
+Then update `~/.ward/config.json`:
 ```json
 {
-  "brain_provider": "openai",
-  "brain_model": "gpt-5.4-nano"
+  "tts_provider": "elevenlabs",
+  "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM"
 }
 ```
+Find voice IDs at https://elevenlabs.io/voice-library.
+Recommended voices: Adam (natural male), Rachel (natural female).
+Model is set to `eleven_turbo_v2` by default for lowest latency (~500ms).
 
-Anthropic example:
-```json
-{
-  "brain_provider": "anthropic",
-  "brain_model": "claude-haiku-4-5-20251001"
-}
-```
+## Optional Brain Overrides
 
-Local Ollama example:
+WARD can also use OpenAI or Anthropic, either globally or only for selected modes.
+
+### Keep Ollama As Default
+
+Fresh installs already seed:
 ```json
 {
   "brain_provider": "ollama",
@@ -127,15 +167,27 @@ Local Ollama example:
 
 `ollama_think: false` is the recommended default for WARD. It reduces the chance that a local thinking-capable model emits extra reasoning content when WARD really needs a short answer or valid JSON.
 
+### Add OpenAI For Selected Tasks
+
+Add to `~/.zshrc` or `~/.zprofile`:
+```bash
+export WARD_OPENAI_API_KEY="sk-..."
+```
+
+`OPENAI_API_KEY` also works if you already use that name elsewhere.
+
 You can also override models by event or mode:
 ```json
 {
-  "brain_provider": "openai",
-  "brain_model": "gpt-5.4-nano",
+  "brain_provider": "ollama",
+  "brain_model": "gemma4:e4b",
+  "brain_providers": {
+    "state": "openai"
+  },
   "brain_models": {
-    "post_response:decision": "gpt-5.4-nano",
-    "state": "gpt-5.4-mini"
-  }
+    "state": "gpt-5.4-nano"
+  },
+  "ollama_think": false
 }
 ```
 
@@ -147,13 +199,30 @@ Resolution order is:
 - `brain_model`
 
 For WARD's current behavior, a practical split is:
-- `post_response:decision` → `gpt-5.4-nano`
-- `summary_request:summary` → `gpt-5.4-mini`
-- `state` → `gpt-5.4-mini`
+- `post_response:decision` → local `gemma4:e4b`
+- `summary_request:summary` → local `gemma4:e4b`
+- `state` → `gpt-5.4-nano` if you want richer recap extraction
 
 `post_response:decision` is the proactive turn-review path.
 
-### 3.1 Tune proactive behavior
+### Use Anthropic Instead
+
+Add to `~/.zshrc` or `~/.zprofile`:
+```bash
+export WARD_ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+> Use `WARD_ANTHROPIC_API_KEY` if you authenticate Claude Code via claude.ai. `ANTHROPIC_API_KEY` also works if you prefer API key auth for everything.
+
+Then set:
+```json
+{
+  "brain_provider": "anthropic",
+  "brain_model": "claude-haiku-4-5-20251001"
+}
+```
+
+## Tune Proactive Behavior
 
 You can tune how often Ward is allowed to comment:
 ```json
@@ -176,44 +245,7 @@ What these do:
 - `significant_file_count` helps distinguish meaningful implementation turns from small edits
 - `max_recent_ward_lines` controls how much recent Ward speech is kept in state to avoid repetition
 
-### 4. Choose your voice
-
-**Option A — macOS voices (default)**
-
-Ward uses `Joelle (Enhanced)` by default. This voice is not installed on macOS by default — install it first:
-
-1. Open **System Settings → Accessibility → Spoken Content**
-2. Click the **System Voice** dropdown → **Manage Voices...**
-3. Find **Joelle (Enhanced)** under English and click the download icon
-4. Wait for the download to complete
-
-To use a different voice instead, list what's installed:
-```bash
-say -v ?
-```
-Then update `~/.ward/config.json`:
-```json
-{ "macos_voice": "Zoe" }
-```
-
-**Option B — ElevenLabs (recommended for best quality)**
-
-Add to `~/.zshrc` or `~/.zprofile`:
-```bash
-export ELEVENLABS_API_KEY="your-key-here"
-```
-Then update `~/.ward/config.json`:
-```json
-{
-  "tts_provider": "elevenlabs",
-  "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM"
-}
-```
-Find voice IDs at https://elevenlabs.io/voice-library.
-Recommended voices: Adam (natural male), Rachel (natural female).
-Model is set to `eleven_turbo_v2` by default for lowest latency (~500ms).
-
-### 5. Add your projects
+## Add More Projects
 
 You can register projects automatically with:
 ```bash
@@ -306,11 +338,11 @@ Run `/summary` after Ward says he left the detailed breakdown in chat and you wa
 
 ## Cost
 
-Ward can use Anthropic or OpenAI for AI calls. Cost depends on the configured provider and model.
-Ollama can be used as a local third option if you want no remote API call for WARD at all.
+Ward defaults to local Ollama, so the primary text-generation path can run with no remote API cost at all.
+OpenAI and Anthropic remain optional if you want targeted overrides or a hosted-only setup.
 ElevenLabs Turbo v2 is approximately $0.0003 per spoken line.
 
 ## Version
 
-Current version: 1.2.0
+Current version: 1.3.0
 See [CHANGELOG.md](CHANGELOG.md) for full version history.

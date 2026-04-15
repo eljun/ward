@@ -1,9 +1,9 @@
 # WARD — Workspace Aware Recap Daemon
-## Claude Code Plugin · Technical Specification v1.2.0
+## Claude Code Plugin · Technical Specification v1.3.0
 
 **Author:** Jun (Eleazar G. Junsan)
 **Created:** April 15, 2026
-**Status:** Implemented and locally verified for the 1.2.0 release
+**Status:** Implemented and locally verified for the 1.3.0 release
 
 ---
 
@@ -68,7 +68,7 @@ ward/
 {
   "name": "ward",
   "description": "WARD — Workspace Aware Recap Daemon. A peer developer voice presence for Claude Code. Ward greets you, recaps your last session, reacts to errors, comments on meaningful turns, and wraps up when you're done.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "author": {
     "name": "Eleazar G. Junsan",
     "url": "https://github.com/eljun"
@@ -97,12 +97,11 @@ Stored at `~/.ward/config.json`. Seeded by `scripts/bootstrap.py`.
   "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM",
   "elevenlabs_model": "eleven_turbo_v2",
   "persona_name": "Dev",
-  "brain_provider": "openai",
-  "brain_model": "gpt-5.4-nano",
-  "brain_models": {
-    "post_response:decision": "gpt-5.4-nano",
-    "state": "gpt-5.4-mini"
-  },
+  "brain_provider": "ollama",
+  "brain_model": "gemma4:e4b",
+  "ollama_host": "http://127.0.0.1:11434",
+  "ollama_think": false,
+  "brain_models": {},
   "proactive": {
     "enabled": true,
     "cooldown_seconds": 90,
@@ -134,8 +133,8 @@ Stored at `~/.ward/config.json`. Seeded by `scripts/bootstrap.py`.
 | `elevenlabs_voice_id` | string | — | ElevenLabs voice ID from their voice library |
 | `elevenlabs_model` | string | `"eleven_turbo_v2"` | ElevenLabs model. Use turbo for speed |
 | `persona_name` | string | `"Dev"` | Your name — what Ward calls you. Substituted into `persona.txt` at runtime |
-| `brain_provider` | string | `"openai"` | `"openai"`, `"anthropic"`, or `"ollama"` |
-| `brain_model` | string | `"gpt-5.4-nano"` | Base model used when no override matches |
+| `brain_provider` | string | `"ollama"` | `"openai"`, `"anthropic"`, or `"ollama"` |
+| `brain_model` | string | `"gemma4:e4b"` | Base model used when no override matches |
 | `brain_models` | object | `{}` | Per-event or per-mode model overrides. Resolution order: `event:mode` → `event` → `mode` → `default` → `brain_model` |
 | `ollama_host` | string | `"http://127.0.0.1:11434"` | Base URL for local Ollama when `brain_provider` is `"ollama"` |
 | `ollama_think` | boolean/string | `false` | Passed through to Ollama's `think` field. Recommended `false` for WARD's concise and structured outputs |
@@ -148,16 +147,17 @@ Stored at `~/.ward/config.json`. Seeded by `scripts/bootstrap.py`.
 Set in `~/.zshrc` or `~/.zprofile`:
 
 ```bash
-export WARD_OPENAI_API_KEY="sk-..."        # Preferred for the default OpenAI setup
+export WARD_OPENAI_API_KEY="sk-..."        # Optional — useful for hybrid overrides like state extraction
 export OPENAI_API_KEY="sk-..."             # Also works if WARD_OPENAI_API_KEY is not set
 export WARD_ANTHROPIC_API_KEY="sk-ant-..." # Optional if using Anthropic instead
 export ANTHROPIC_API_KEY="sk-ant-..."      # Also works if WARD_ANTHROPIC_API_KEY is not set
 export ELEVENLABS_API_KEY="..."            # Optional — only if tts_provider is elevenlabs
 ```
 
-> If you use Anthropic via Claude Code login, set `WARD_ANTHROPIC_API_KEY` instead of
-> `ANTHROPIC_API_KEY` to avoid the auth conflict warning. For OpenAI, prefer `WARD_OPENAI_API_KEY`
-> to keep WARD isolated from other tools in your shell environment.
+> The primary install path does not require a hosted LLM key because WARD defaults to local
+> `ollama / gemma4:e4b`. If you use Anthropic via Claude Code login, set `WARD_ANTHROPIC_API_KEY`
+> instead of `ANTHROPIC_API_KEY` to avoid the auth conflict warning. For OpenAI, prefer
+> `WARD_OPENAI_API_KEY` to keep WARD isolated from other tools in your shell environment.
 
 ### 4.3 state.json
 
@@ -204,7 +204,19 @@ Stored at `~/.ward/state.json` or `~/.ward/states/{project}.json`. Written by `s
 
 This is what allows Ward to stay concise, avoid saying the same thing twice, and later summarize a long assistant answer if the user asks.
 
-### 4.5 Bootstrap
+### 4.5 First-Time Install Flow
+
+Primary install flow:
+
+1. Install and launch Ollama locally
+2. Confirm the daemon is reachable with `ollama list`
+3. Pull `gemma4:e4b` if it is not already present with `ollama pull gemma4:e4b`
+4. Run `python3 scripts/bootstrap.py`
+5. Register the current project with `python3 scripts/init_project.py`
+
+This yields a fully local-first WARD setup with no hosted-model dependency.
+
+### 4.6 Bootstrap
 
 WARD does not assume `~/.ward` already exists. First-time setup should run:
 
@@ -218,7 +230,7 @@ Behavior:
 - copies seed `config.json`, `persona.txt`, and `state.json` if they do not already exist
 - preserves existing files unless `--force` is passed
 
-### 4.6 Project Registration
+### 4.7 Project Registration
 
 WARD is globally configured but project-aware. Registering a project means adding the current working directory to `~/.ward/config.json` under `projects`.
 
@@ -233,6 +245,28 @@ Behavior:
 - infers `project_name` from the directory name unless `--name` is passed
 - infers `tasks_md_path` from common task-file locations unless `--tasks` is passed
 - writes or updates the matching project entry in `~/.ward/config.json`
+
+### 4.8 Optional Hosted Overrides
+
+WARD is Ollama-first by default, but hosted providers remain useful for targeted quality upgrades.
+
+Practical override example:
+
+```json
+{
+  "brain_provider": "ollama",
+  "brain_model": "gemma4:e4b",
+  "brain_providers": {
+    "state": "openai"
+  },
+  "brain_models": {
+    "state": "gpt-5.4-nano"
+  },
+  "ollama_think": false
+}
+```
+
+This keeps proactive chatter and spoken summaries local while routing state extraction to OpenAI.
 
 ---
 
@@ -394,17 +428,17 @@ elif provider == "anthropic":
     ...
 ```
 
-**Current default:** `openai / gpt-5.4-nano`
+**Current default:** `ollama / gemma4:e4b`
 
 **Supported providers:**
+- `ollama` for local models served through the Ollama daemon
 - `openai`
 - `anthropic`
-- `ollama` for local models served through the Ollama daemon
 
 **Recommended split:**
-- `post_response:decision` → cheap fast model such as `gpt-5.4-nano`
-- `summary_request:summary` → stronger small model such as `gpt-5.4-mini`
-- `state` → stronger small model such as `gpt-5.4-mini`
+- `post_response:decision` → local `gemma4:e4b`
+- `summary_request:summary` → local `gemma4:e4b`
+- `state` → hosted override such as `gpt-5.4-nano` when you want stronger recap extraction
 
 ### 6.2 state_store.py
 
@@ -607,6 +641,15 @@ Format: [version] — date — description
 - Verified `gemma4:e4b` works for proactive decisions and spoken summaries
 - Documented WARD clearly as global install + project-aware runtime
 
+## [1.3.0] — 2026-04-15
+
+### Ollama-First Defaults Release
+- Switched the default WARD brain to local `ollama / gemma4:e4b`
+- Updated the bootstrap seed config to use `gemma4:e4b` as the primary model
+- Expanded install docs to cover Ollama setup, model pull/check, bootstrap, and project registration
+- Clarified OpenAI and Anthropic as optional alternatives or targeted overrides
+- Updated the technical spec to match the Ollama-first install and runtime model
+
 ## [1.1.0] — 2026-04-15
 
 ### Proactive Refactor Release
@@ -762,12 +805,13 @@ working style preferences, or tone adjustments.
 
 ## Cost
 
-Ward can use OpenAI or Anthropic for AI calls. Cost depends on the configured provider and model.
+Ward defaults to local Ollama, so the primary text-generation path can run without remote API cost.
+OpenAI and Anthropic remain optional if you want targeted overrides or a hosted-only setup.
 ElevenLabs Turbo v2 is approximately $0.0003 per spoken line.
 
 ## Version
 
-Current version: 1.2.0
+Current version: 1.3.0
 See CHANGELOG.md for full version history.
 ```
 
@@ -858,7 +902,7 @@ Do not build these in v1. Validate the peer feeling first.
 |---|---|
 | Daily log files (append-only JSONL per day) | v1.1.0 |
 | "What did we do last week?" query | v1.1.0 |
-| `/status` command — current git branch + task context | v1.2.0 |
-| Decision point detection (ambiguous tool sequences) | v1.2.0 |
+| `/status` command — current git branch + task context | v1.3.x |
+| Decision point detection (ambiguous tool sequences) | v1.3.x |
 | Local SQLite instead of JSONL logs | v2.0.0 |
 | Multiple persona profiles | v2.0.0 |
