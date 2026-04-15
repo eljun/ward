@@ -11,8 +11,8 @@
     "url": "https://github.com/eljun/ward"
   },
   "license": "MIT",
-  "scripts": {
-    "postinstall": "node scripts/postinstall.js"
+  "bin": {
+    "ward-bootstrap": "scripts/postinstall.js"
   },
   "keywords": [
     "claude",
