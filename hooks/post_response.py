@@ -91,8 +91,23 @@ def _flatten_text(value) -> str:
     return ""
 
 
+def _entry_role(entry: dict) -> str:
+    # Transcript entries use top-level "type" field for role (user/assistant).
+    # Older formats may use "role" directly. The nested message object also has
+    # a "role" field — check all three locations.
+    t = entry.get("type", "")
+    if t in ("user", "assistant"):
+        return t
+    return entry.get("role", "") or entry.get("message", {}).get("role", "")
+
+
 def _entry_blocks(entry: dict) -> list[dict]:
-    content = entry.get("content", [])
+    # Content is nested inside entry.message.content in current transcript format.
+    msg = entry.get("message")
+    if isinstance(msg, dict):
+        content = msg.get("content", [])
+    else:
+        content = entry.get("content", [])
     if isinstance(content, list):
         return [block for block in content if isinstance(block, dict)]
     if isinstance(content, str):
@@ -124,7 +139,7 @@ def _tool_brief(block: dict) -> dict:
 def collect_latest_turn(entries: list[dict]) -> dict:
     assistant_index = None
     for idx in range(len(entries) - 1, -1, -1):
-        if entries[idx].get("role") == "assistant":
+        if _entry_role(entries[idx]) == "assistant":
             assistant_index = idx
             break
     if assistant_index is None:
@@ -132,7 +147,7 @@ def collect_latest_turn(entries: list[dict]) -> dict:
 
     user_index = None
     for idx in range(assistant_index - 1, -1, -1):
-        if entries[idx].get("role") == "user":
+        if _entry_role(entries[idx]) == "user":
             user_index = idx
             break
 
@@ -146,7 +161,7 @@ def collect_latest_turn(entries: list[dict]) -> dict:
     files_touched = set()
 
     for entry in window:
-        role = entry.get("role", "")
+        role = _entry_role(entry)
         if role == "user" and not user_text:
             user_text = _entry_text(entry)
 
