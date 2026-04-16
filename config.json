@@ -11,11 +11,12 @@
   "ollama_think": false,
   "proactive": {
     "enabled": true,
-    "cooldown_seconds": 90,
+    "cooldown_seconds": 30,
     "long_response_chars": 900,
     "min_response_chars": 140,
+    "conversation_min_chars": 60,
     "significant_file_count": 3,
-    "max_recent_ward_lines": 5
+    "max_recent_ward_lines": 10
   },
   "speak_on": ["session_start", "errors", "session_end"],
   "projects": {}

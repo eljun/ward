@@ -21,11 +21,12 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 DEFAULT_PROACTIVE = {
     "enabled": True,
-    "cooldown_seconds": 90,
+    "cooldown_seconds": 30,
     "long_response_chars": 900,
     "min_response_chars": 140,
+    "conversation_min_chars": 60,
     "significant_file_count": 3,
-    "max_recent_ward_lines": 5,
+    "max_recent_ward_lines": 10,
 }
 MAX_LINES = 200
 INTERESTING_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"}
@@ -259,6 +260,10 @@ def gate_turn(turn: dict, state: dict, config: dict) -> dict:
         signals.append("risk")
     if _text_contains_any(assistant_text, COMPLETION_KEYWORDS):
         signals.append("completion")
+    # Buddy-mode: let pure conversation turns reach the brain so Ward can chime in
+    # with short reactions. The brain still decides whether to speak.
+    if not signals and assistant_chars >= proactive["conversation_min_chars"]:
+        signals.append("conversation_turn")
 
     if not signals:
         return {"should_call_brain": False, "reason": "routine_turn", "signals": [], "config": proactive}

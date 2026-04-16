@@ -5,6 +5,15 @@ Format: [version] — date — description
 
 ---
 
+## [Unreleased]
+
+### Buddy Mode
+- Loosened the `post_response` gate with a new `conversation_turn` signal so pure chat/Q&A turns can reach the brain instead of always staying silent
+- Lowered the default `cooldown_seconds` from 90 to 30 and raised `max_recent_ward_lines` from 5 to 10 so Ward chimes in more often without repeating himself
+- Added `conversation_min_chars` (default 60) to `proactive` config so the minimum chat-turn length is tunable
+- Rewrote the `post_response` persona block to give Ward a peer-dev buddy tone on conversational turns, not just implementation ones
+- Planned follow-up tracked in `docs/task/002-ward-buddy-skill.md`: a Claude Code skill so the user can directly address Ward with "hey ward"-style triggers
+
 ## [1.3.0] — 2026-04-15
 
 ### Ollama-First Defaults Release

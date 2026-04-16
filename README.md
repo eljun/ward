@@ -232,11 +232,12 @@ You can tune how often Ward is allowed to comment:
 {
   "proactive": {
     "enabled": true,
-    "cooldown_seconds": 90,
+    "cooldown_seconds": 30,
     "long_response_chars": 900,
     "min_response_chars": 140,
+    "conversation_min_chars": 60,
     "significant_file_count": 3,
-    "max_recent_ward_lines": 5
+    "max_recent_ward_lines": 10
   }
 }
 ```
@@ -245,8 +246,11 @@ What these do:
 - `enabled` turns proactive comments on or off
 - `cooldown_seconds` prevents Ward from speaking too often across consecutive turns
 - `long_response_chars` marks a reply as “too long to read aloud” and favors a short handoff
+- `conversation_min_chars` is the floor for letting pure chat turns (no tools, no code) reach the brain so Ward can chime in as a buddy; the brain still decides whether to speak
 - `significant_file_count` helps distinguish meaningful implementation turns from small edits
 - `max_recent_ward_lines` controls how much recent Ward speech is kept in state to avoid repetition
+
+Since Gemma runs locally and is free to call, the defaults favor Ward being a conversational buddy rather than a strict critic. Raise `cooldown_seconds` or `conversation_min_chars` if he gets chatty.
 
 ## Add More Projects
 
