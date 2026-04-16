@@ -1,7 +1,7 @@
 {
   "name": "ward-claude",
-  "version": "1.3.0",
-  "description": "WARD — Workspace Aware Recap Daemon. A peer developer voice presence for Claude Code.",
+  "version": "2.0.0",
+  "description": "Legacy npm fallback for WARD. Primary install is now the Claude Code plugin — see the repo README.",
   "author": {
     "name": "Eleazar G. Junsan",
     "url": "https://github.com/eljun"
@@ -12,8 +12,8 @@
   },
   "license": "MIT",
   "bin": {
-    "ward-bootstrap": "scripts/postinstall.js",
-    "ward-init": "scripts/ward-init.js"
+    "ward-bootstrap": "postinstall.js",
+    "ward-init": "ward-init.js"
   },
   "keywords": [
     "claude",

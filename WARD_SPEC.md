@@ -1,9 +1,10 @@
 # WARD — Workspace Aware Recap Daemon
-## Claude Code Plugin · Technical Specification v1.3.0
+## Claude Code Plugin · Technical Specification v2.0.0
 
 **Author:** Jun (Eleazar G. Junsan)
 **Created:** April 15, 2026
-**Status:** Implemented and locally verified for the 1.3.0 release
+**Last revised:** April 16, 2026
+**Status:** Plugin-native install refactor in flight (task 003). Clean-profile smoke test pending.
 
 ---
 
@@ -15,7 +16,7 @@
 **Persona:** Ward
 **Design Philosophy:** Fail toward silence. Speak only when there is something worth saying. 1–2 sentences maximum per response.
 
-**Install model:** Global install, project-aware runtime. WARD is installed once, stores config/persona/state in `~/.ward`, and switches project context based on the current working directory.
+**Install model:** Claude Code plugin, project-aware runtime. Installed at user scope via `/plugin marketplace add eljun/ward` then `/plugin install ward@ward-plugins`. No `sudo`, no `npm`, no manual `settings.json` edits. Config/persona/state live in `~/.ward`, selected at runtime by the current working directory.
 
 ### 1.1 Architecture Direction
 
@@ -64,22 +65,47 @@ ward/
 
 **File:** `.claude-plugin/plugin.json`
 
+Claude Code auto-registers hooks declared in the manifest on install — the user does not edit `~/.claude/settings.json`. `commands/` and `skills/` are auto-discovered from the plugin root. `${CLAUDE_PLUGIN_ROOT}` is expanded at runtime to the installed plugin directory.
+
 ```json
 {
   "name": "ward",
-  "description": "WARD — Workspace Aware Recap Daemon. A peer developer voice presence for Claude Code. Ward greets you, recaps your last session, reacts to errors, comments on meaningful turns, and wraps up when you're done.",
-  "version": "1.3.0",
-  "author": {
-    "name": "Eleazar G. Junsan",
-    "url": "https://github.com/eljun"
-  },
+  "description": "WARD — Workspace Aware Recap Daemon. A peer developer voice presence for Claude Code.",
+  "version": "2.0.0",
+  "author": { "name": "Eleazar G. Junsan", "url": "https://github.com/eljun" },
   "repository": "https://github.com/eljun/ward",
   "license": "MIT",
-  "requires": {
-    "claude_code": ">=2.1.0",
-    "python": ">=3.9"
+  "requires": { "claude_code": ">=2.1.0", "python": ">=3.9" },
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py"}]}],
+    "Stop":         [{"hooks": [{"type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/post_response.py"}]}],
+    "PostToolUse":  [{"hooks": [{"type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/post_tool_use.py"}]}],
+    "SessionEnd":   [{"hooks": [{"type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/session_end.py"}]}]
   }
 }
+```
+
+### 3.1 Marketplace Manifest
+
+**File:** `.claude-plugin/marketplace.json`
+
+WARD publishes a marketplace-of-one so users can install without any Anthropic-approval step.
+
+```json
+{
+  "name": "ward-plugins",
+  "owner": { "name": "Eleazar G. Junsan", "url": "https://github.com/eljun" },
+  "plugins": [
+    { "name": "ward", "source": "./", "description": "Workspace Aware Recap Daemon — a peer developer voice presence for Claude Code.", "version": "2.0.0" }
+  ]
+}
+```
+
+Install flow:
+
+```
+/plugin marketplace add eljun/ward
+/plugin install ward@ward-plugins
 ```
 
 ---
@@ -206,22 +232,30 @@ This is what allows Ward to stay concise, avoid saying the same thing twice, and
 
 ### 4.5 First-Time Install Flow
 
-Primary install flow:
+Primary install flow (plugin-native):
 
 1. Install and launch Ollama locally
 2. Confirm the daemon is reachable with `ollama list`
 3. Pull `gemma4:e4b` if it is not already present with `ollama pull gemma4:e4b`
-4. Run `python3 scripts/bootstrap.py`
-5. Register the current project with `python3 scripts/init_project.py`
+4. From inside Claude Code: `/plugin marketplace add eljun/ward`
+5. From inside Claude Code: `/plugin install ward@ward-plugins`
+6. Register the current project with `/ward-init`
 
-This yields a fully local-first WARD setup with no hosted-model dependency.
+`~/.ward/` is seeded automatically on the first hook fire. `/ward setup` forces the seed ahead of that first hook. This yields a fully local-first WARD setup with no hosted-model dependency, no `sudo`, and no manual `settings.json` edits.
+
+A legacy npm fallback is preserved at `legacy/npm/` for environments without `/plugin install`.
 
 ### 4.6 Bootstrap
 
-WARD does not assume `~/.ward` already exists. First-time setup should run:
+Bootstrap runs automatically on the first hook fire via `scripts/bootstrap.py::ensure_ward_home_silent()`. Explicit runs are supported:
 
 ```bash
-python3 scripts/bootstrap.py
+# From inside Claude Code
+/ward setup
+/ward setup --force
+
+# From a shell (plugin install path)
+python3 <plugin-root>/scripts/bootstrap.py
 ```
 
 Behavior:
@@ -229,6 +263,7 @@ Behavior:
 - creates `~/.ward/states/`
 - copies seed `config.json`, `persona.txt`, and `state.json` if they do not already exist
 - preserves existing files unless `--force` is passed
+- under the plugin install path, does **not** copy slash commands into `~/.claude/commands/` (the plugin system delivers them from the repo); the legacy npm path opts into command copying with `--legacy-commands`
 
 ### 4.7 Project Registration
 

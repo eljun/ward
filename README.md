@@ -9,20 +9,24 @@ The goal is not narration. The goal is a quiet senior dev riding shotgun.
 
 ## Install
 
-```bash
-npm install -g github:eljun/ward
-ward-bootstrap
+WARD is distributed as a Claude Code plugin. From inside Claude Code:
+
+```
+/plugin marketplace add eljun/ward
+/plugin install ward@ward-plugins
 ```
 
-`ward-bootstrap` creates `~/.ward/` with seed config, persona, and state files. Run it once after install.
+No `sudo`, no `npm`, no manual `~/.claude/settings.json` edits. On first hook fire WARD seeds `~/.ward/` automatically with config, persona, and state files.
 
-WARD is currently:
-- globally installed
+To force the seed ahead of the first hook, run `/ward setup` once.
+
+WARD is:
+- installed at user scope via the Claude Code plugin system
 - globally configured under `~/.ward`
 - project-aware at runtime through the `projects` map in `~/.ward/config.json`
 - Ollama-first by default, using local `gemma4:e4b`
 
-That means you install WARD once, then point it at one or more projects.
+A legacy npm install path is preserved under [`legacy/npm/`](legacy/npm/README.md) for environments where `/plugin install` is unavailable.
 
 ## Primary Brain
 
@@ -57,17 +61,19 @@ http://127.0.0.1:11434
 
 ### 2. Bootstrap WARD Home
 
-After installing, run:
+WARD seeds `~/.ward/` automatically the first time any hook fires. To force it up front, run from inside Claude Code:
 
-```bash
-ward-bootstrap
+```
+/ward setup
 ```
 
-To re-run it manually or from inside the WARD repo:
+Or from a shell, directly against the installed plugin:
 
 ```bash
-python3 scripts/bootstrap.py
+python3 ~/.claude/plugins/ward/scripts/bootstrap.py
 ```
+
+(Exact plugin install path may vary. `/ward setup` is the portable form.)
 
 This creates:
 - `~/.ward/config.json`
@@ -75,11 +81,7 @@ This creates:
 - `~/.ward/state.json`
 - `~/.ward/states/`
 
-Existing files are preserved. Use `--force` only if you explicitly want to overwrite the seed files:
-
-```bash
-python3 scripts/bootstrap.py --force
-```
+Existing files are preserved. Use `/ward setup --force` only if you explicitly want to overwrite the seed files.
 
 ### 3. Set Your Name
 
@@ -301,24 +303,29 @@ Proactive behavior is gated hard before the model is called:
 ### Manual Commands
 
 ```
-/recap         — Re-sync Ward from your tasks file (active sections only)
-/recap full    — Re-sync Ward from your full tasks file
-/summary       — Ask Ward to summarize the last long reply he saved for later
-/ward-init     — Register the current project in ~/.ward/config.json
+/recap                 — Re-sync Ward from your tasks file (active sections only)
+/recap full            — Re-sync Ward from your full tasks file
+/summary               — Ask Ward to summarize the last long reply he saved for later
+/ward-init             — Register the current project in ~/.ward/config.json
+/ward status           — Print current brain / voice / proactive config and registered projects
+/ward setup [--force]  — Seed or re-seed ~/.ward/ (normally automatic on first hook fire)
+/ward voice <name>     — Set macOS voice or ElevenLabs voice id
+/ward brain <provider> [model]  — Switch brain_provider (ollama|openai|anthropic) and model
+/ward proactive on|off|cooldown N|chat N   — Toggle or tune proactive commentary
+/ward doctor           — Check Ollama reachability, API keys, and config health
 ```
 
 Run `/recap` any time your priorities shift mid-session or at the start of a new week.
 Run `/summary` after Ward says he left the detailed breakdown in chat and you want the spoken version.
+Run `/ward doctor` if Ward is silent when you expect him to speak.
 
 ## Troubleshooting
 
 **Ward is silent on session start**
-- Check that your configured provider key is set:
-- `echo $WARD_ANTHROPIC_API_KEY`
-- `echo $WARD_OPENAI_API_KEY`
-- Run `python3 scripts/bootstrap.py` if `~/.ward/config.json` or `~/.ward/persona.txt` does not exist yet
+- Run `/ward doctor` to check Ollama reachability, keys, TTS, and config health in one shot
+- If you installed via the legacy npm path, verify the hooks are wired into `~/.claude/settings.json`; the plugin install path wires them automatically
 - Confirm Python 3.9+ is available: `python3 --version`
-- Run `python3 scripts/speak.py "test"` from the ward repo to test TTS
+- Run `/ward setup` if `~/.ward/config.json` or `~/.ward/persona.txt` does not exist yet
 
 **Ward is using the wrong model**
 - Confirm `brain_provider` and `brain_model` in `~/.ward/config.json`
