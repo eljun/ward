@@ -1,0 +1,16 @@
+{
+  "name": "ward-plugins",
+  "owner": {
+    "name": "Eleazar G. Junsan",
+    "url": "https://github.com/eljun"
+  },
+  "description": "Marketplace-of-one for the WARD plugin.",
+  "plugins": [
+    {
+      "name": "ward",
+      "source": "./",
+      "description": "Workspace Aware Recap Daemon — a peer developer voice presence for Claude Code.",
+      "version": "2.0.0"
+    }
+  ]
+}

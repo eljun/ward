@@ -37,8 +37,10 @@ def main() -> None:
         payload = {}
 
     cwd = payload.get("cwd", os.getcwd())
+    from bootstrap import ensure_ward_home_silent
     from state_store import find_project_config, load_config, load_state
 
+    ensure_ward_home_silent()
     config = load_config()
     _, state = load_state(cwd, config)
 

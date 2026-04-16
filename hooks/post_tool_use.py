@@ -65,8 +65,11 @@ def main() -> None:
 
     save_last_error(tool_name, tool_error)
 
+    from bootstrap import ensure_ward_home_silent
     from brain import run as brain_run
     from speak import speak
+
+    ensure_ward_home_silent()
 
     context = {
         "tool_name": tool_name,

@@ -101,8 +101,10 @@ def main() -> None:
     transcript_path = payload.get("transcript_path", "")
     cwd = payload.get("cwd", os.getcwd())
 
+    from bootstrap import ensure_ward_home_silent
     from state_store import find_project_config, load_config, load_state, merge_state, write_state
 
+    ensure_ward_home_silent()
     config = load_config()
     state_path, current_state = load_state(cwd, config)
 

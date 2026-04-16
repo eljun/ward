@@ -5,9 +5,24 @@ Format: [version] — date — description
 
 ---
 
-## [Unreleased]
+## [2.0.0] — Unreleased
 
-### Buddy Mode
+### Plugin-Native Install Refactor
+- WARD is now distributed as a Claude Code plugin. The primary install is `/plugin marketplace add eljun/ward` followed by `/plugin install ward@ward-plugins`. No sudo, no npm, no manual `settings.json` edits.
+- `.claude-plugin/plugin.json` now declares all four hooks (`SessionStart`, `Stop`, `PostToolUse`, `SessionEnd`) so Claude Code auto-registers them on install. Previous builds left hooks undeclared, which meant they never fired unless the user wired them into `settings.json` by hand.
+- Added `.claude-plugin/marketplace.json` so users can install from a self-owned marketplace without any Anthropic approval step.
+- Rewrote `commands/recap.md`, `commands/summary.md`, and `commands/ward-init.md` to use `${CLAUDE_PLUGIN_ROOT}` at runtime instead of the `{ward_repo}` string substitution that was applied at npm postinstall.
+- Added `/ward` slash command with subcommands: `status`, `setup`, `voice`, `brain`, `proactive`, `doctor`. Users can now view and edit WARD configuration without hand-editing `~/.ward/config.json`.
+- Hooks now call `ensure_ward_home_silent()` on every fire so the first-run seed of `~/.ward/` is automatic instead of piggy-backing on npm postinstall.
+- `scripts/bootstrap.py` no longer copies commands into `~/.claude/commands/` on the plugin install path; the plugin system delivers commands directly from the repo.
+- Moved the npm install path under `legacy/npm/` with its own README. Kept it available as a fallback for environments without `/plugin install`, with a deprecation notice and an explicit `--legacy-commands` flag to opt into the old command-copying behavior.
+- Documented the new flow in `README.md` and `WARD_SPEC.md`, bumped the spec version to 2.0.0.
+
+### Breaking Changes
+- Primary install changes from `npm install -g github:eljun/ward` to the plugin path. Existing npm users should `npm uninstall -g ward-claude` before reinstalling via the plugin system to avoid double-firing hooks.
+
+## [Unreleased — Buddy Mode]
+
 - Loosened the `post_response` gate with a new `conversation_turn` signal so pure chat/Q&A turns can reach the brain instead of always staying silent
 - Lowered the default `cooldown_seconds` from 90 to 30 and raised `max_recent_ward_lines` from 5 to 10 so Ward chimes in more often without repeating himself
 - Added `conversation_min_chars` (default 60) to `proactive` config so the minimum chat-turn length is tunable
