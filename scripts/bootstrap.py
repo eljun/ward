@@ -15,10 +15,11 @@ import os
 import shutil
 import sys
 
+from ward_paths import ward_home
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_DIR = os.path.dirname(SCRIPT_DIR)
-WARD_HOME = os.path.expanduser("~/.ward")
+WARD_HOME = ward_home()
 CLAUDE_COMMANDS_DIR = os.path.expanduser("~/.claude/commands")
 
 SEED_FILES = (

@@ -6,9 +6,10 @@ import json
 import os
 from typing import Any, Optional
 
+from ward_paths import ward_config_path, ward_home
 
-WARD_DIR = os.path.expanduser("~/.ward")
-CONFIG_PATH = os.path.join(WARD_DIR, "config.json")
+WARD_DIR = ward_home()
+CONFIG_PATH = ward_config_path()
 STATE_DEFAULTS = {
     "current_task": "",
     "top_priorities": [],

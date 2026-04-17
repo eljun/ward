@@ -2,88 +2,41 @@
 """
 session_start.py — SessionStart hook for WARD.
 
-Reads state.json and speaks a recap if last_active was a previous day.
-Speaks a brief greeting if resuming same day. Silent on errors — never crash.
-
-Hook payload (stdin):
-  {
-    "hook_event_name": "SessionStart",
-    "session_id": "...",
-    "cwd": "/path/to/project",
-    "transcript_path": "...",
-    "source": "startup|resume|clear|compact"
-  }
+Thin Claude hook entrypoint: normalize the hook payload into a shared session
+event, then let the shared runtime decide how to greet or recap.
 """
+
+from __future__ import annotations
 
 import json
 import os
 import sys
-from datetime import date
 
-# Resolve paths relative to this file's location
+
 HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_DIR = os.path.dirname(HOOKS_DIR)
 SCRIPTS_DIR = os.path.join(REPO_DIR, "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 
-WARD_DIR = os.path.expanduser("~/.ward")
-
 
 def main() -> None:
-    # Read hook payload from stdin
     try:
         payload = json.load(sys.stdin)
     except Exception:
         payload = {}
 
-    cwd = payload.get("cwd", os.getcwd())
     from bootstrap import ensure_ward_home_silent
-    from state_store import find_project_config, load_config, load_state
+    from claude_adapter import normalize_claude_hook_payload
+    from session_runtime import handle_event
 
     ensure_ward_home_silent()
-    config = load_config()
-    _, state = load_state(cwd, config)
-
-    # Import scripts after path setup
-    from brain import run as brain_run
-    from speak import speak
-
-    today = date.today().isoformat()
-
-    # No state yet
-    if not state:
-        speak("No session history yet. Run /recap to sync from your tasks file.")
-        return
-
-    # Look up project config
-    _, project_config = find_project_config(cwd, config)
-    project_name = project_config.get("project_name") or state.get("project", "")
-
-    last_active = state.get("last_active", "")
-
-    context = {
-        "last_active": last_active,
-        "current_task": state.get("current_task", ""),
-        "top_priorities": state.get("top_priorities", []),
-        "pending_prs": state.get("pending_prs", []),
-        "last_summary": state.get("last_summary", ""),
-        "project": project_name,
-    }
-
-    if last_active == today:
-        # Same-day resume — brief greeting only
-        speech = brain_run(event="session_start_same_day", context=context, mode="speak")
-    else:
-        # New day — full recap
-        speech = brain_run(event="session_start", context=context, mode="speak")
-
-    speak(speech)
+    for event in normalize_claude_hook_payload(payload):
+        handle_event(event, output_mode="speak")
 
 
 if __name__ == "__main__":
     try:
         main()
-    except Exception as e:
-        # Fail toward silence — never surface a stack trace to the user
-        print(f"[ward] session_start error: {e}", file=sys.stderr)
+    except Exception as exc:
+        print(f"[ward] session_start error: {exc}", file=sys.stderr)
         sys.exit(0)

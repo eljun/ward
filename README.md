@@ -28,6 +28,27 @@ WARD is:
 
 A legacy npm install path is preserved under [`legacy/npm/`](legacy/npm/README.md) for environments where `/plugin install` is unavailable.
 
+## Codex Usage
+
+The plugin manifest in `.claude-plugin/plugin.json` is for Claude Code only. Codex does not currently auto-load WARD through that manifest, so the Codex path is an observer that reads Codex JSON events and routes them through the same shared WARD runtime.
+
+For one-off Codex runs, pipe `codex exec --json` into the observer:
+
+```bash
+codex exec --json --sandbox read-only -C /absolute/path/to/project "Your prompt here" \
+  | env WARD_HOME=/tmp/ward-codex-test python3 /path/to/ward/scripts/ward_codex_observe.py \
+      --source exec-json \
+      --output print \
+      --cwd /absolute/path/to/project
+```
+
+Notes:
+- `WARD_HOME=/tmp/ward-codex-test` is optional but useful for isolated testing without touching your main `~/.ward` state.
+- Add `--dump-events` only when debugging. It prints every normalized event and gets noisy quickly.
+- The Node wrapper [`scripts/ward-codex-observe.js`](scripts/ward-codex-observe.js) is equivalent if you prefer launching the Python observer through Node.
+
+There is not yet a native Codex auto-hook install flow in this repository. Today, “activating WARD for Codex” means running Codex through this observer pipeline.
+
 ## Primary Brain
 
 WARD now defaults to:

@@ -10,9 +10,11 @@ import os
 import sys
 import urllib.request
 
-WARD_DIR = os.path.expanduser("~/.ward")
-CONFIG_PATH = os.path.join(WARD_DIR, "config.json")
-PERSONA_PATH = os.path.join(WARD_DIR, "persona.txt")
+from ward_paths import ward_config_path, ward_home, ward_persona_path
+
+WARD_DIR = ward_home()
+CONFIG_PATH = ward_config_path()
+PERSONA_PATH = ward_persona_path()
 
 CONFIG_DEFAULTS = {
     "tts_provider": "macos",

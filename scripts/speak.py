@@ -17,8 +17,9 @@ import subprocess
 import sys
 import tempfile
 
+from ward_paths import ward_config_path
 
-CONFIG_PATH = os.path.expanduser("~/.ward/config.json")
+CONFIG_PATH = ward_config_path()
 
 DEFAULTS = {
     "tts_provider": "macos",
