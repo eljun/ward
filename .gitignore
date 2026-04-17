@@ -1,1 +1,29 @@
-.claude/
+# local dependencies and generated runtimes
+/node_modules
+/venv
+/.venv
+__pycache__/
+*.pyc
+
+# build and test artifacts
+/coverage
+/.next/
+/build
+/dist
+/out
+
+# local state
+.DS_Store
+*.pem
+.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env*
+/.ward/
+/.claude/
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
