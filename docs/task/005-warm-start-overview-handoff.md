@@ -32,6 +32,8 @@ short notifications.
   - open blockers per workspace
   - suggested next actions (from prior Post-session outputs)
   - upcoming scheduled runs
+  - **today's calendar** (if calendar MCP configured): meetings + free
+    focus blocks, in local tz
 - Narrated layer (Orchestrator Brain `recap_and_brief` mode):
   - short paragraph introducing the day
   - "Hey <honorific> <name>" if profile has honorific
@@ -40,6 +42,16 @@ short notifications.
 - Regenerates prose when structured content changes meaningfully.
 - Per local-tz day; cache rolls at midnight.
 
+### Calendar integration (optional)
+
+- Reads from any MCP server tagged `kind: calendar` (Google Calendar,
+  Outlook, iCal).
+- Configured via the global MCP scope.
+- If no calendar MCP is configured, the calendar strip is hidden and the
+  brief omits the calendar block — graceful absence.
+- Presence hook: a meeting currently in progress auto-flips presence to
+  `dnd` (configurable).
+
 ### Overview screen (UI)
 
 - Greeting card (name + honorific + brief narration; "speak" button)
@@ -47,6 +59,9 @@ short notifications.
 - Running / paused sessions
 - Recent handoffs (last 5)
 - Blockers list
+- **Calendar strip** (if a calendar MCP server is configured): today's
+  meetings + estimated focus-time blocks. Feeds presence (user in meeting
+  → `dnd` auto-flip when configured) and daily-brief enrichment.
 - "What should I resume first?" action button that opens a conversational
   prompt pre-filled
 

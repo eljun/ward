@@ -70,6 +70,92 @@ Two supported patterns, both outbound-initiated:
 - Webhook endpoints without signature verification.
 - Auth-less remote access.
 
+## Identity
+
+Even single-user, WARD maintains a small Identity model because the moment
+you add a second remote channel, sender-matching and allowlisting become
+non-trivial.
+
+### Entities
+
+- **User Profile** (singleton): name, honorific, timezone, work hours,
+  quiet hours, persona, TTS preferences, presence default.
+- **External Identity**: a `(channel, external_id)` pair that represents
+  you on a specific carrier. Example: `(slack, U01ABC)`,
+  `(telegram, 4821935)`, `(github, eljun)`, `(email, you@you.com)`.
+- **Remote Allowlist Entry**: an External Identity permitted to issue
+  inbound commands. Role tag: `owner` (you) or `delegate` (future,
+  post-MVP — e.g., an assistant who can issue read commands).
+
+### Model
+
+```ts
+type UserProfile = {
+  id: "self";                  // singleton
+  display_name: string;
+  honorific?: string;
+  timezone: string;
+  work_hours: { start: string; end: string };
+  quiet_hours: { start: string; end: string };
+  persona: { tone?: "formal" | "casual"; verbosity?: "terse" | "normal" | "verbose" };
+  tts: { enabled: boolean; voice?: string; rate?: number; pitch?: number };
+  presence_default: "present" | "away" | "dnd";
+};
+
+type ExternalIdentity = {
+  id: string;
+  channel: "slack" | "telegram" | "email" | "github" | "discord" | string;
+  external_id: string;         // opaque per channel
+  display_name?: string;
+  verified_at?: string;
+};
+
+type RemoteAllowlistEntry = {
+  id: string;
+  identity_id: string;
+  role: "owner" | "delegate";
+  allowed_commands: string[];  // subset of the global allowlist
+  expires_at?: string;         // optional, for time-bound delegation
+};
+```
+
+### Binding External Identities
+
+On first inbound from a new sender on any channel, WARD:
+
+1. Hashes the sender's `external_id` with channel-specific salt.
+2. Looks up `ExternalIdentity` + `RemoteAllowlistEntry`.
+3. If no match: respond with a polite rejection; log an audit event
+   including the sender's display name (to help the user allowlist
+   intentionally); do not process the command.
+4. If match: process per command allowlist, rate limits, and autonomy
+   policy.
+
+Adding an identity: `ward identity add <channel> <external_id>
+[--display-name ...] [--role owner]`. UI: Settings → Identities.
+
+### Audit
+
+Every inbound (accepted or rejected) records the External Identity (by
+id) in the `inbound.received` event. Log queries support filtering by
+identity.
+
+### Why Its Own Layer
+
+Without Identity as a first-class concept, each `RemoteChannel`
+implementation re-implements allowlist checks. With it, the channel's
+`verifySignature()` returns "authenticated as external_id X" and the
+Communication layer's shared middleware handles the rest. Adding Discord
+or Signal later means zero new security code.
+
+### Future Work
+
+- Delegation with scoped, time-bound capabilities (e.g., read-only access
+  for 4 h to a spouse or assistant).
+- Cross-channel identity linking (the same human across Slack and
+  Telegram share an identity cluster).
+- Per-identity quiet hours overriding the User Profile's defaults.
+
 ## Authentication
 
 ### Device Token

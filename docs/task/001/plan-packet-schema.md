@@ -28,6 +28,22 @@ any round boundary.
 | 4 | **Convergence** | Merge, eliminate dominated options, identify the best direction | Moderator synthesizes critiqued proposals into 1–3 candidate directions. Participants vote with reasoning. |
 | 5 | **Decision** | Produce the final Plan Packet | Moderator writes the canonical plan, citing participant contributions. User approves, requests revision, or aborts. |
 
+## Convergence Policy (per workspace)
+
+Plan Mode supports three policies for resolving disagreement among
+participants at Round 4. Policy is a workspace-scope preference
+(falls back to global). Default: `consensus`.
+
+| Policy | Behavior |
+|---|---|
+| `consensus` *(default)* | Moderator requires participants to align on a single top candidate. If they don't, the Moderator surfaces the disagreement to the user as a clarifying question. |
+| `coordinator_decides` | Moderator picks a direction even when critics dissent. Dissent is recorded in `plan_packet.risks` and in round transcripts so it's auditable. Matches the ARIA-style "coordinator + critics" pattern where the coordinator holds executive authority. |
+| `user_decides` | Moderator presents all ranked candidates as options; user picks. No automatic convergence. Best for unfamiliar domains where the user wants explicit control. |
+
+Policy affects only Round 4. Rounds 1–3 behave identically across
+policies. Round 5 writes the chosen direction with cited contributions
+regardless.
+
 ## Participant Roles
 
 Assigned at Plan Mode start from Brain Registry `plan_mode_participants`.
@@ -132,6 +148,8 @@ the user before proceeding.
 ```
 
 ### Round 4: Convergence
+
+Behavior depends on `convergence_policy` (see above).
 
 **Moderator** does pre-work: collapses proposals + critiques into 1–3
 candidate directions. Then input:

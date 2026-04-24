@@ -15,6 +15,36 @@ listening for messages from Slack and Telegram, signature verification,
 sender allowlist, command parsing, presence-aware routing, destructive-
 action gating, and the audit trail.
 
+This task implements the `RemoteChannel` extension seam from
+[`001/extension-seams.md`](001/extension-seams.md). Slack and Telegram
+ship as the first two implementations; email is described as a third
+(implementation deferred until needed). New carriers (Discord, Signal)
+plug in by writing one adapter file.
+
+## RemoteChannel interface
+
+```ts
+interface RemoteChannel {
+  readonly id: string;
+  readonly kind: "slack" | "telegram" | "email" | "discord" | "signal" | string;
+
+  start(): Promise<void>;
+  stop(): Promise<void>;
+
+  send(msg: OutboundMessage): Promise<SendResult>;
+  onMessage(handler: (m: InboundMessage) => void): Unsubscribe;
+
+  verifySignature(raw: Buffer, headers: Record<string, string>): boolean;
+  formatIntervention(i: Intervention): OutboundMessage;
+  parseAction(payload: unknown): InteractionAction | null;
+}
+```
+
+The Communication layer's shared middleware (allowlist, rate limit, audit
+log, presence-aware routing, redaction) is **channel-agnostic** and runs
+above each `RemoteChannel`. Adding Discord = one file + one registry
+entry.
+
 ## In Scope
 
 ### Slack inbound (primary)
@@ -34,6 +64,21 @@ action gating, and the audit trail.
 - Bot token: `secret://telegram-bot-token`
 - Same command set as Slack
 - Inline keyboard support for Intervention approve/reject
+
+### Email as a third carrier (interface only — impl deferred)
+
+- `EmailChannel` implementing `RemoteChannel`:
+  - Outbound: SMTP (or transactional API like Resend / SES) via secrets
+  - Inbound: IMAP poll with a dedicated mailbox or webhook-forwarded
+    alias (e.g. `ward+commands@your-domain`)
+  - Signature: DKIM verification on inbound; per-sender token in subject
+    line as a backup
+- This task ships the `EmailChannel` class skeleton + tests against a
+  mock SMTP/IMAP server, but does **not** wire it into the live config by
+  default. Activation is a documented opt-in (typically requires a
+  user-controlled domain).
+- Goal: prove the seam fits a third carrier so the design holds, without
+  taking on real-world spam / deliverability work in MVP.
 
 ### Sender allowlist + command allowlist
 

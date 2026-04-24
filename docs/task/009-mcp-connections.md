@@ -48,6 +48,19 @@ and WARD-as-MCP-server (read-only).
 - Events: `mcp.server_started`, `mcp.server_exited`, `mcp.tool_invoked`,
   `mcp.tool_result`, `mcp.tool_denied`
 
+### Circuit breakers
+
+- Per-server failure-rate policy using the unified `quota_ledger`
+  (introduced in 008) per [`001/quota.md`](001/quota.md):
+  - rolling 60 s failure count
+  - open state freezes the server for a configurable duration
+  - half-open probe after freeze; closes if probe succeeds
+- Events: `quota.frozen`, `quota.unfrozen` (scope `mcp_server`).
+- Breaker open → tool calls return synthetic `server_unavailable` result
+  with retry hint; no calls reach the real server until closed.
+- UI surfaces open breakers prominently; `ward quota unfreeze` allows
+  manual override.
+
 ### Tool classification + autonomy policy
 
 - Heuristic classifier (read / write / destructive / privileged) with

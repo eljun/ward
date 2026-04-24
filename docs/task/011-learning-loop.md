@@ -50,21 +50,69 @@ Learning happens through state and memory updates — not fine-tuning.
 - Suggestions surface as banners in Settings → Brains; user accepts to
   modify `routing:` config
 
+### Unified TriggerSource registry (Scheduling layer)
+
+Implement the `TriggerSource` extension seam from
+[`001/extension-seams.md`](001/extension-seams.md). All triggers — for
+playbooks, alerts, scheduled runs — flow through one registry so adding
+a new trigger kind is one adapter file.
+
+```ts
+interface TriggerSource {
+  readonly kind: "cron" | "git" | "pr" | "ci" | "file" | "presence"
+                | "inbound" | "webhook" | "calendar" | string;
+  start(bus: EventBus): Promise<void>;
+  stop(): Promise<void>;
+  describe(spec: TriggerSpec): string;   // for UI
+}
+```
+
+Shipped trigger kinds in this task:
+
+- `cron` — local cron-style schedules (per local-tz)
+- `git` — branch / commit detected (via filesystem watcher in 006)
+- `pr` — PR opened / status changed / merged (via GitHub MCP)
+- `ci` — CI status changes (via GitHub MCP / similar)
+- `file` — file change in linked repo
+- `presence` — presence state transition
+- `inbound` — remote command arrived (consumes from 010)
+- `calendar` — calendar event starting in N min (from calendar MCP, 005)
+
+Future trigger kinds (cloud-scheduled remote, IoT, webhook from
+arbitrary service) are one adapter; execution path unchanged. This is
+the seam that makes "scheduled cloud tasks" a deployment change later
+rather than a refactor.
+
 ### Playbooks
 
 - Migration `0011_playbooks.sql`:
-  - playbook (id, name, trigger_type, steps_json, confidence,
-    source: user|inferred, enabled)
-- Playbook trigger types:
-  - `morning_brief_open`
-  - `workspace_open`
-  - `session_completed`
-  - `git_branch_created`
+  - playbook (id, name, trigger_kind, trigger_spec_json, steps_json,
+    confidence, source: user|inferred, enabled)
 - Steps are typed actions:
   - `notify`, `set_preference`, `start_session`, `open_plan_mode`,
-    `write_wiki_section`
-- Inferred playbooks come from recurring user action sequences (mined from
-  audit log); same shadow → confirm flow as preferences
+    `write_wiki_section`, `publish_to_pm`
+- Playbook engine subscribes to `trigger.fired` events from the
+  TriggerSource registry; matches against playbook bindings; dispatches
+  steps through the Orchestration layer (autonomy gates apply).
+- **Scheduled playbooks** drop out for free: a playbook with
+  `trigger_kind: cron` and `trigger_spec_json: { cron: "0 6 * * *" }`
+  fires daily at 06:00 local-tz. Used for things like "every morning at
+  06:00, run the data backfill on project-y in a visible session, but
+  pause for approval before destructive steps."
+- Inferred playbooks come from recurring user action sequences (mined
+  from audit log); same shadow → confirm flow as preferences.
+
+### PM tool sync (consumer of 003 + 009)
+
+- Background job pulls task status from configured PM MCP (Linear /
+  GitHub Issues / Jira / Notion) on the workspaces with
+  `publish_tasks_to` set (006).
+- Reconciles `task.external_ref` to keep status in sync (closed in PM →
+  closed in WARD; reopened externally → reopened in WARD).
+- Polls every 5 min by default; can switch to webhook-driven later as
+  another `TriggerSource` impl.
+- New `inferrer` watches frequently-completed-but-not-marked-done tasks
+  to suggest auto-close rules (shadow inbox).
 
 ### Reversal surfaces
 

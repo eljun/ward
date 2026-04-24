@@ -59,6 +59,24 @@ modes (subscription / api / local).
 - Router consults cap before routing; falls back to
   `budget_exceeded_fallback` when over
 
+### Unified quota ledger
+
+- Migration also adds `quota_ledger` table per [`001/quota.md`](001/quota.md).
+- Every brain call writes to `quota_ledger` via the `QuotaPolicy`
+  abstraction (not directly to `cost_ledger_entry`).
+- `cost_ledger_entry` stays as the domain-shaped table for the Cost UI;
+  `quota_ledger` is the generic enforcement substrate used by Quota,
+  MCP circuit breakers (009), remote rate limits (010), etc.
+
+### Cost forecasting
+
+- `quota.forecast` events emitted when burn rate projects a soft or hard
+  cap breach before the window's reset time.
+- UI cost dashboard shows projected breach time per policy.
+- CLI: `ward cost forecast` (optionally per-brain).
+- Forecast uses a simple linear projection; replace with EWMA later if
+  noisy.
+
 ### MCP overlay generation
 
 - When launching a worker, generate `~/.ward/sessions/<id>/.mcp.json` with

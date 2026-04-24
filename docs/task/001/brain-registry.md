@@ -4,6 +4,11 @@ The Brain Registry is the configuration of all LLMs available to the WARD
 Runtime. It is pluggable, per-install, and covers three distinct LLM surfaces
 with different defaults and accounting modes.
 
+The Brain layer exposes one named seam — `BrainAdapter` — defined in
+[`001/extension-seams.md`](extension-seams.md). The Registry is *data*;
+adapters are *code*. Adding a new provider means adding one adapter file
+(or zero files if it speaks an existing protocol) and one registry entry.
+
 ## LLM Surfaces
 
 WARD invokes LLMs in three places; each has different concerns:
@@ -125,6 +130,65 @@ routing:
   privacy_sensitive: local-qwen
   budget_exceeded_fallback: local-qwen
 ```
+
+## BrainAdapter Interface (the extension seam)
+
+Every brain is invoked through a `BrainAdapter`. The Runtime picks an
+adapter by the `kind` field in a Registry entry. If the adapter for a
+`kind` doesn't exist, the brain is reported unhealthy in `ward doctor`.
+
+```ts
+interface BrainAdapter {
+  readonly kind: string;                     // matches registry `kind`
+  readonly runtimeKind: "cli" | "sdk" | "api" | "local";
+
+  probe(): Promise<HealthStatus>;            // login state, ping, version check
+  capabilities(): BrainCapabilities;         // tool_use, streaming, json_mode, max_context
+  accounting(): "subscription" | "api" | "local";
+
+  invoke(call: BrainCall): AsyncIterable<BrainEvent>;
+  cancel(callId: string): Promise<void>;
+}
+
+type BrainCall = {
+  callId: string;
+  mode: OrchestratorMode;                    // see 001/orchestrator-modes.md
+  systemPrompt: string;
+  messages: ChatMessage[];
+  tools: ToolSpec[];                         // subject to allowlist
+  contextPacket?: ContextPacket;             // see 001/harness-contract.md
+  temperature?: number;
+  maxTokens?: number;
+  traceId: string;
+};
+
+type BrainEvent =
+  | { kind: "message_delta"; text: string }
+  | { kind: "tool_call"; tool: string; arguments: unknown; callId: string }
+  | { kind: "tool_result"; callId: string; result: unknown; error?: string }
+  | { kind: "thinking"; text: string }
+  | { kind: "status"; state: string; detail?: string }
+  | { kind: "usage"; tokensIn?: number; tokensOut?: number; dollars?: number; durationMs: number }
+  | { kind: "done"; reason: "complete" | "max_tokens" | "canceled" | "error"; error?: string };
+```
+
+Shipped adapters (in `packages/core/brains/adapters/`):
+
+- `claude-cli-adapter.ts` — spawn `claude -p --output-format stream-json`
+- `codex-cli-adapter.ts` — spawn `codex exec`
+- `anthropic-sdk-adapter.ts` — Claude Agent SDK wrapper
+- `openai-api-adapter.ts` — OpenAI Responses API
+- `openai-compatible-adapter.ts` — generic (Ollama, LM Studio, vLLM, DeepSeek, Groq)
+- `simulated-adapter.ts` — scripted responses for tests and Plan Mode 006
+
+Adding a new provider:
+
+1. Write `my-vendor-adapter.ts` implementing `BrainAdapter`.
+2. Register it under a new `kind` in the adapter index.
+3. Add a Registry entry in `~/.ward/brains.yaml` with `kind: my-vendor`.
+
+No other code changes. Contract tests in `packages/core/contracts/tests/`
+ensure every adapter emits a conforming `BrainEvent` stream.
 
 ## Runtime Kinds
 
