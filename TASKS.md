@@ -52,6 +52,7 @@
   - Doc: [docs/task/001-personal-orchestrator-command-center.md](docs/task/001-personal-orchestrator-command-center.md)
   - Goal: Lock architecture, contracts, schemas, and non-functional requirements that all sub-tasks (002–012) conform to. No code.
   - Appendices:
+    - [Extension Seams](docs/task/001/extension-seams.md)
     - [Brain Registry](docs/task/001/brain-registry.md)
     - [Orchestrator Modes](docs/task/001/orchestrator-modes.md)
     - [Harness Contract](docs/task/001/harness-contract.md)
@@ -59,6 +60,7 @@
     - [Plan Packet Schema](docs/task/001/plan-packet-schema.md)
     - [MCP Registry](docs/task/001/mcp-registry.md)
     - [Security Model](docs/task/001/security-model.md)
+    - [Quota](docs/task/001/quota.md)
     - [Warm-Start](docs/task/001/warm-start.md)
 
 ## Testing

@@ -32,6 +32,14 @@ calls per `001/warm-start.md`.
   packet_id.
 - Task generation from approved packets (creates `task` + `task_contract`
   rows, links to plan via `plan_packet_id`).
+- **Convergence policy** per workspace: `consensus` (default),
+  `coordinator_decides` (ARIA-style), `user_decides`. See
+  [`001/plan-packet-schema.md`](001/plan-packet-schema.md). Policy is a
+  workspace preference; UI surfaces it in Settings → Workspace.
+- **Publish to PM tool** (optional, per workspace): on `generate-tasks`,
+  if the workspace has `publish_tasks_to: <pm_tool_id>` set, WARD calls
+  the PM tool's MCP create-issue tool and records each returned URL in
+  `task.external_ref`. Idempotent by task title + plan_packet_id.
 
 ### Simulated participants
 
@@ -69,6 +77,10 @@ calls per `001/warm-start.md`.
 - `POST /api/plan/:plan_id/abort`
 - `POST /api/plan/:plan_id/generate-tasks` — create tasks from approved
   packet
+- `POST /api/plan/:plan_id/publish-tasks-external` — publish generated
+  tasks to a configured PM tool (Linear / GitHub / Jira / Notion) via
+  MCP, record the returned URLs in `task.external_ref`. Opt-in per
+  workspace.
 
 ### CLI
 

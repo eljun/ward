@@ -51,6 +51,17 @@ all have a solid runtime to build on.
   - `ward status` — daemon up/down, port, uptime, schema version
   - `ward doctor` — health checks above
   - `ward auth rotate` — new device token, propagates to CLI
+- **CLI `--json` output mode**: every CLI subcommand supports `--json`;
+  when set, output is a single JSON document conforming to a per-command
+  Zod schema. Shared CLI utility `cliEmit(result)` handles both human and
+  machine output. This unlocks shell scripting from day one.
+- **Layering lint** in CI: configure `dependency-cruiser` (or
+  `eslint-plugin-boundaries`) with rules from
+  `docs/task/001/extension-seams.md` ("Enforcing Layering"). Cross-layer
+  imports that bypass declared contracts in `packages/core/contracts/`
+  fail the build. Stub contract types for 003–012 go into
+  `packages/core/contracts/` in this task so the lint has something to
+  guard from day one.
 
 ## Out of Scope
 
@@ -73,6 +84,10 @@ all have a solid runtime to build on.
 8. Graceful shutdown flushes logs and releases the PID lock.
 9. CLI cold start for `ward status` is under 200 ms on a warm machine.
 10. No Python or Next.js references remain in the repo.
+11. Every CLI subcommand in this task supports `--json` and emits a
+    Zod-validated result.
+12. Layering lint runs in CI and fails the build on a seeded violation
+    (a test fixture imports across layers bypassing the contract).
 
 ## Deliverables
 

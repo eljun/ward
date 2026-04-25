@@ -61,76 +61,92 @@ Users interact with WARD through:
 
 ## Architecture Summary
 
-WARD is a single long-running **Runtime** (Bun + TypeScript daemon) plus a
-browser UI served by that runtime. The Runtime is deterministic code. An
-**Orchestrator Brain** (pluggable LLM) is called by the Runtime when prose,
-moderation, or reasoning is needed. Third-party integrations are reached
-through **MCP servers** spawned or connected to by the Runtime.
+WARD is organized as **ten layers** plus five **cross-cutting concerns**.
+Each layer exposes stable contracts (see `001/extension-seams.md`); the
+cross-cutting concerns weave through multiple layers and are enforced
+uniformly.
 
-### Component Map
+The top-level process is a long-running **Runtime** daemon (Bun + TypeScript)
+that hosts the layers and serves a browser UI on loopback. The Runtime
+layer is pure plumbing; the **Orchestration** layer is the conductor that
+chooses modes, routes brains, assembles context, and gates autonomy — the
+two used to be conflated and are now explicitly split.
+
+### Architecture Layers
 
 ```
-                +--------------------------------------------------+
-                |                    Browser UI                    |
-                |   (Vite + lean framework, no SSR, no Next.js)   |
-                +--------------------+-----------------------------+
-                                     | HTTP / SSE / WebSocket
-                                     | (127.0.0.1, device token)
-                +--------------------v-----------------------------+
-                |                 Runtime (Bun + TS)              |
-                |  - HTTP API, SSE event bus, WebSocket PTY mux   |
-                |  - Auth, single-instance lock, migrations       |
-                |  - Router, queues, watchdogs, cost ledger       |
-                |  - Warm-start cache, precompute pipeline        |
-                |  - MCP client + server registry                 |
-                |  - Inbound listener (Slack Socket Mode)         |
-                +---+------------+-----------+-----------+--------+
-                    |            |           |           |
-             +------v---+  +-----v----+  +---v-----+  +--v--------+
-             | SQLite   |  | memory/  |  | Harness |  | Orchestr. |
-             | (ops     |  | (wiki,   |  | (PTY +  |  | Brain     |
-             | state)   |  | git-     |  | headles |  | (plug-    |
-             |          |  | backed)  |  | s)      |  | gable)    |
-             +----------+  +----------+  +----+----+  +----+------+
-                                              |            |
-                                              |            v
-                                              |     +------+------+
-                                              |     | Brain       |
-                                              |     | Registry    |
-                                              |     | (CLI / SDK /|
-                                              |     | API / local)|
-                                              |     +-------------+
-                                              |
-                                              v
-                                       +------+---------+
-                                       | MCP Servers    |
-                                       | (GitHub, Slack |
-                                       | Vercel, Supa., |
-                                       | fs, WARD-self) |
-                                       +----------------+
+  ┌──────────────────────────────────────────────────────────────┐
+  │  UI                   (browser SPA + CLI; consumers only)     │
+  ├──────────────────────────────────────────────────────────────┤
+  │  Orchestration        mode selection · context packet · intent │
+  │                       parsing · autonomy gates · Plan Mode     │
+  │                       engine · presence service                │
+  ├──────────────────────────────────────────────────────────────┤
+  │  Learning  │  Scheduling  │  Communication  │  Brain  │ Harness│
+  │  outcomes  │  triggers +  │  channels +     │  LLMs + │ workers│
+  │  inferrer  │  playbooks   │  inbound/out    │  routing│        │
+  ├──────────────────────────────────────────────────────────────┤
+  │  Connection (MCP)     three-scope registry · lifecycle ·      │
+  │                       tool routing · secret injection          │
+  ├──────────────────────────────────────────────────────────────┤
+  │  Persistence          SQLite ops state · git-backed memory ·  │
+  │                       attachments · warm cache                 │
+  ├──────────────────────────────────────────────────────────────┤
+  │  Runtime              daemon · HTTP/SSE/WS · event bus · queue │
+  │                       primitive · single-instance · migrations │
+  │                       · structured logs                        │
+  └──────────────────────────────────────────────────────────────┘
+
+   Cross-cutting:  Security   Observability   Identity
+                   Config     Quota
 ```
 
-### High-Level Components
+### Layer Responsibilities
 
-- **Runtime**: Bun + TypeScript daemon. Deterministic. Owns HTTP API, event
-  bus, auth, queues, harness lifecycle, MCP client, warm-start cache.
-- **Orchestrator Brain**: pluggable LLM invoked by the Runtime for conversational
-  output, synthesis, moderation, intent parsing, alert composition. Configured
-  via the Brain Registry (see `001/brain-registry.md`).
-- **Workspace State**: SQLite database. Operational truth for workspaces,
-  tasks, sessions, events, outcomes, preferences, cost ledger.
-- **Wiki Memory**: git-backed directory tree under `~/.ward/memory/`. Universal
-  wiki plus per-workspace wikis. All LLM edits auto-commit; human edits are
-  first-class.
-- **Agent Harness**: wraps worker processes (Claude Code CLI, Codex CLI, Agent
-  SDK adapters) in visible (PTY) or headless (piped stdio) mode.
-- **MCP Client + Registry**: loads, spawns, and routes tool calls across three
-  scopes (global / workspace / repo). Reuses Claude Code's `.mcp.json` format
-  at the repo scope.
-- **Inbound Listener**: Slack Socket Mode connection (primary) for receiving
-  remote commands; Telegram long-poll (secondary).
-- **Browser UI**: Vite-built SPA served by the Runtime. No Next.js, no SSR
-  framework. Dev and prod ship from the same Bun server.
+| Layer | Owns | Extension seam(s) |
+|---|---|---|
+| **Runtime** | process, HTTP/SSE/WS, event bus, queue primitive, single-instance lock, migrations, structured logs | — (plumbing) |
+| **Persistence** | SQLite operational state, git-backed memory, attachments, warm cache | `MemoryBackend`, `SearchBackend`, `CacheBackend`, `AttachmentIngestor` |
+| **Connection (MCP)** | three-scope MCP registry (global / workspace / repo), server lifecycle, tool routing + allowlist, secret injection, WARD-as-MCP-server | MCP protocol; `ConnectorAdapter` fallback |
+| **Brain** | pluggable LLMs, Brain Registry, per-concern routing, cost accounting | `BrainAdapter` |
+| **Harness** | worker runtime adapters (CLI / SDK / API / local / simulated), lifecycle state machine, watchdog, artifact capture | `HarnessAdapter` |
+| **Communication** | remote channels, inbound listener, outbound composer, rate limiting, audit; **observers for external agents WARD didn't launch** (Claude Code / Codex / Aider / etc.) so the peer stays context-aware regardless of who started the session | `RemoteChannel`, `AgentObserver` |
+| **Scheduling** | unified trigger registry (cron, git, PR, CI, file, presence, inbound, webhook), playbook engine | `TriggerSource` |
+| **Learning** | outcome capture, inference engines, routing advisor, playbook miner — all shadow-then-confirm | `Inferrer` |
+| **Orchestration** | context packet assembly, mode selection, intent parsing, autonomy gates, Plan Mode engine, presence service — the conductor | `AutonomyPolicy` |
+| **UI** | browser SPA (Vite) + CLI — consumers of the Runtime API | — |
+
+### Cross-Cutting Concerns
+
+| Concern | Spans | Anchor doc |
+|---|---|---|
+| **Security** | auth, secrets, redaction, tool allowlists, destructive-action gating | `001/security-model.md` |
+| **Observability** | logs, traces, metrics, audit, `ward doctor` | 001 NFRs + 012 |
+| **Identity** | user profile, external identities per channel, sender allowlists | `001/security-model.md` (Identity section) |
+| **Config** | scope-resolved preferences (global / workspace / repo), hot reload | `001/brain-registry.md` + `001/mcp-registry.md` |
+| **Quota** | cost caps, subscription concurrency, remote rate limits, MCP circuit breakers | `001/quota.md` |
+
+### Layer Enforcement
+
+A dependency lint in CI (from Task 002) forbids cross-layer imports that
+bypass the declared contracts. Details in `001/extension-seams.md`
+("Enforcing Layering"). Without this, the layers are decorative; with it,
+they're real.
+
+### Control Flow (example)
+
+A user asks "delegate project-y backfill to Claude":
+
+1. **UI** posts to Runtime → `/api/conversation`.
+2. **Runtime** validates device token, emits `user.message`, forwards to **Orchestration**.
+3. **Orchestration** runs a classifier → Action mode. Calls **Brain** via Brain Registry for intent parsing.
+4. **Orchestration** resolves the parsed action (`delegate`, workspace `project-y`, worker `claude`), consults **Config** (autonomy for project-y = strict) and **Quota** (is Claude cap reached? no).
+5. **Orchestration** asks **Harness** to launch a session. Harness picks the adapter by `runtime_kind` (claude-code-cli), pulls warm context from **Persistence** (`context_packet:project-y`), writes the MCP overlay from **Connection**, spawns the worker.
+6. Worker emits events → **Harness** normalizes → **Runtime** event bus → fanout to **Persistence** (SQLite), **UI** (SSE), **Learning** (outcome ingest), **Communication** (alert if presence=away).
+7. A tool call arrives → **Connection** proxy checks allowlist against **AutonomyPolicy** → if gated, emits Intervention → **Orchestration** routes to UI or **Communication** based on **Identity** + presence.
+8. Everything flows through **Security** redaction before egress and **Observability** logs with a shared trace id.
+
+This is the recurring pattern: layers talk through contracts, Orchestration conducts, cross-cutting concerns apply uniformly.
 
 ### Process Model
 
@@ -203,6 +219,11 @@ Bun maturity vs Node (mitigated by `node:`-prefixed fallbacks where needed).
 The following appendix documents under `docs/task/001/` define contracts that
 all downstream tasks must honor:
 
+- [`001/extension-seams.md`](001/extension-seams.md) — the named interfaces
+  for every pluggable layer (`BrainAdapter`, `MemoryBackend`, `SearchBackend`,
+  `CacheBackend`, `HarnessAdapter`, `ConnectorAdapter`, `RemoteChannel`,
+  `TriggerSource`, `AttachmentIngestor`, `Inferrer`, `AutonomyPolicy`,
+  `RedactionRule`). Enforcement via CI dependency lint.
 - [`001/brain-registry.md`](001/brain-registry.md) — Brain Registry schema,
   auth modes (subscription / API / local), runtime kinds (CLI / SDK / local),
   capability tags, per-concern routing, cost accounting modes.
@@ -216,13 +237,18 @@ all downstream tasks must honor:
 - [`001/event-taxonomy.md`](001/event-taxonomy.md) — the canonical event types,
   their payload schemas, and which consumers read which.
 - [`001/plan-packet-schema.md`](001/plan-packet-schema.md) — Plan Mode output
-  schema, round protocol, and persistence rules.
+  schema, round protocol, `convergence_policy` (consensus / coordinator /
+  user), persistence rules.
 - [`001/mcp-registry.md`](001/mcp-registry.md) — MCP registry schema, the three
   scopes (global / workspace / repo), reuse of Claude Code's `.mcp.json`,
   secret references, merge and conflict rules.
 - [`001/security-model.md`](001/security-model.md) — threat model, auth token,
-  bind policy, tunneling options, redaction middleware rules, inbound signing
+  bind policy, tunneling options, redaction middleware rules, **Identity**
+  (user profile + external identities + allowlists), inbound signing
   verification, destructive-action approval policy.
+- [`001/quota.md`](001/quota.md) — unified quota model covering brain cost
+  caps, subscription concurrency, remote rate limits, MCP circuit breakers,
+  forecasting, freeze actions.
 - [`001/warm-start.md`](001/warm-start.md) — precompute pipeline, cache keys,
   freshness rules, prewarm on daemon start, event-driven refresh,
   response-time SLAs.
@@ -316,11 +342,13 @@ not re-specify them.
 
 Task 001 is complete when:
 
-1. This document defines: product boundaries, architecture summary, tech stack
-   decisions, storage model, transport model, and non-functional requirements.
-2. All eight appendix documents (`brain-registry`, `orchestrator-modes`,
-   `harness-contract`, `event-taxonomy`, `plan-packet-schema`, `mcp-registry`,
-   `security-model`, `warm-start`) exist and define their contracts.
+1. This document defines: product boundaries, architecture layers and
+   cross-cutting concerns, tech stack decisions, storage model, transport
+   model, and non-functional requirements.
+2. All ten appendix documents (`extension-seams`, `brain-registry`,
+   `orchestrator-modes`, `harness-contract`, `event-taxonomy`,
+   `plan-packet-schema`, `mcp-registry`, `security-model`, `quota`,
+   `warm-start`) exist and define their contracts.
 3. Sub-task docs for 002 through 012 exist with scope and acceptance criteria.
 4. `TASKS.md` reflects the new split.
 5. `README.md` is updated to remove all Next.js and Python-runtime language.

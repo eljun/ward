@@ -50,21 +50,137 @@ Learning happens through state and memory updates — not fine-tuning.
 - Suggestions surface as banners in Settings → Brains; user accepts to
   modify `routing:` config
 
+### AgentObserver registry (Communication layer)
+
+Implement the `AgentObserver` extension seam from
+[`001/extension-seams.md`](001/extension-seams.md) so WARD has context
+on coding agents the user runs **outside** WARD. This is essential to
+the peer-developer experience: most of the user's day is spent in
+`claude` and `codex` directly, not in WARD-launched sessions.
+
+Shipped observers in this task:
+
+- **`ClaudeCodeObserver`**:
+  - On install, writes hook scripts to `~/.claude/hooks.d/` (`Stop`,
+    `Notification`, `PostToolUse`, `UserPromptSubmit`) — each is a
+    short `curl` POST to WARD loopback with the device token.
+  - Also tails `~/.claude/projects/<hash>/<session>.jsonl` for full
+    transcript content.
+  - Maps `cwd` to a workspace via `workspace_repo.local_path`.
+- **`CodexObserver`**:
+  - Watches `~/.codex/sessions/` for new rollout files.
+  - Tails the active rollout for events; parses Codex's event JSON
+    format to WARD events.
+  - Same workspace mapping by repo path.
+
+Both observers normalize to the canonical `external_agent.*` event
+family and flow into the same event bus used by WARD-launched sessions.
+Post-session mode runs at session end (Stop hook for Claude Code; rollout
+end-marker for Codex), writing summaries to wiki and invalidating warm
+cache like any other session.
+
+#### Unmapped repos
+
+When an external agent runs in a `cwd` not linked to any WARD workspace:
+
+- Events are still ingested but tagged `workspace_id: null`.
+- The next time the user opens WARD, an "Unmapped activity" card surfaces:
+  "I noticed you ran `claude` in `~/Code/random-experiment` — want to
+  make it a workspace?"
+- Preference `external.unmapped_repo_prompt` (default `on`) controls the
+  card. Off → events go to the Unmapped bucket silently.
+
+#### Private / incognito external sessions
+
+- **Wrapper alias**: `ward install-aliases` creates `claude-private` and
+  `codex-private` shell aliases that run the agent with hooks disabled
+  for that invocation (env var skips the WARD POST inside the hook script).
+- **Inline token**: a prompt starting with `[private]` or containing
+  `<ward:private>` flags the session as incognito at observation time.
+  The observer still ingests events for live event-bus consumers but
+  does not write to wiki, does not feed the learning loop, and does not
+  appear in default session lists.
+
+#### Volume coalescing
+
+External activity volume can dwarf WARD-launched sessions. To keep cost
+and noise bounded:
+
+- **Threshold for Post-session writes**: only sessions with ≥ 3 turns OR
+  ≥ 2 minutes wall-clock trigger a Post-session Brain call and a
+  per-session wiki entry. Below threshold → one-line entry in
+  `sessions.md` log only.
+- **Daily rollup**: short below-threshold sessions accumulate; an
+  end-of-day `Silent`-mode rollup writes a single digest entry per
+  workspace per day.
+- **Workspace soft cap**: configurable per-workspace daily limit on
+  Post-session Brain calls (default 50/day). Excess sessions roll into
+  the daily digest only. Quota events emitted per
+  [`001/quota.md`](001/quota.md).
+
+### Unified TriggerSource registry (Scheduling layer)
+
+Implement the `TriggerSource` extension seam from
+[`001/extension-seams.md`](001/extension-seams.md). All triggers — for
+playbooks, alerts, scheduled runs — flow through one registry so adding
+a new trigger kind is one adapter file.
+
+```ts
+interface TriggerSource {
+  readonly kind: "cron" | "git" | "pr" | "ci" | "file" | "presence"
+                | "inbound" | "webhook" | "calendar" | string;
+  start(bus: EventBus): Promise<void>;
+  stop(): Promise<void>;
+  describe(spec: TriggerSpec): string;   // for UI
+}
+```
+
+Shipped trigger kinds in this task:
+
+- `cron` — local cron-style schedules (per local-tz)
+- `git` — branch / commit detected (via filesystem watcher in 006)
+- `pr` — PR opened / status changed / merged (via GitHub MCP)
+- `ci` — CI status changes (via GitHub MCP / similar)
+- `file` — file change in linked repo
+- `presence` — presence state transition
+- `inbound` — remote command arrived (consumes from 010)
+- `calendar` — calendar event starting in N min (from calendar MCP, 005)
+
+Future trigger kinds (cloud-scheduled remote, IoT, webhook from
+arbitrary service) are one adapter; execution path unchanged. This is
+the seam that makes "scheduled cloud tasks" a deployment change later
+rather than a refactor.
+
 ### Playbooks
 
 - Migration `0011_playbooks.sql`:
-  - playbook (id, name, trigger_type, steps_json, confidence,
-    source: user|inferred, enabled)
-- Playbook trigger types:
-  - `morning_brief_open`
-  - `workspace_open`
-  - `session_completed`
-  - `git_branch_created`
+  - playbook (id, name, trigger_kind, trigger_spec_json, steps_json,
+    confidence, source: user|inferred, enabled)
 - Steps are typed actions:
   - `notify`, `set_preference`, `start_session`, `open_plan_mode`,
-    `write_wiki_section`
-- Inferred playbooks come from recurring user action sequences (mined from
-  audit log); same shadow → confirm flow as preferences
+    `write_wiki_section`, `publish_to_pm`
+- Playbook engine subscribes to `trigger.fired` events from the
+  TriggerSource registry; matches against playbook bindings; dispatches
+  steps through the Orchestration layer (autonomy gates apply).
+- **Scheduled playbooks** drop out for free: a playbook with
+  `trigger_kind: cron` and `trigger_spec_json: { cron: "0 6 * * *" }`
+  fires daily at 06:00 local-tz. Used for things like "every morning at
+  06:00, run the data backfill on project-y in a visible session, but
+  pause for approval before destructive steps."
+- Inferred playbooks come from recurring user action sequences (mined
+  from audit log); same shadow → confirm flow as preferences.
+
+### PM tool sync (consumer of 003 + 009)
+
+- Background job pulls task status from configured PM MCP (Linear /
+  GitHub Issues / Jira / Notion) on the workspaces with
+  `publish_tasks_to` set (006).
+- Reconciles `task.external_ref` to keep status in sync (closed in PM →
+  closed in WARD; reopened externally → reopened in WARD).
+- Polls every 5 min by default; can switch to webhook-driven later as
+  another `TriggerSource` impl.
+- New `inferrer` watches frequently-completed-but-not-marked-done tasks
+  to suggest auto-close rules (shadow inbox).
 
 ### Reversal surfaces
 
@@ -111,6 +227,18 @@ Learning happens through state and memory updates — not fine-tuning.
    trigger required.
 7. All learned data is namespaced by scope (global / workspace) and
    inspectable.
+8. `ward install-aliases` writes `claude-private` and `codex-private`
+   aliases; using them produces incognito events that do not write to
+   wiki and do not feed the learning loop.
+9. `ClaudeCodeObserver` end-to-end: launching `claude` in a linked-repo
+   `cwd` with hooks installed produces events on WARD's bus; session
+   end writes a wiki summary; warm cache invalidates.
+10. `CodexObserver` end-to-end equivalent.
+11. Unmapped-repo card appears on next WARD open when an external
+    agent runs in a `cwd` not linked to any workspace.
+12. Volume threshold: a sub-threshold external session writes a single
+    log line, no Post-session Brain call. Above threshold writes a full
+    summary.
 
 ## Deliverables
 

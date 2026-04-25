@@ -40,6 +40,32 @@ observability polish, and export.
   button
 - Notification when cap exceeded (Slack / Telegram if away)
 
+### Quota panel (cross-cutting UI)
+
+- Settings → Quotas, surfacing every `QuotaPolicy` from
+  [`001/quota.md`](001/quota.md):
+  - brain cost caps
+  - subscription concurrency
+  - remote command rate limits
+  - MCP circuit breakers
+- Per-policy progress bars, burn-rate sparklines, projected breach time
+- "Freeze / unfreeze" controls
+- Audit log of `quota.*` events
+- Single UI for all quota concerns; one mental model for the user.
+
+### PR review surfacing
+
+- PR watcher (via GitHub MCP) extends from "status changed" (already in
+  event taxonomy) to also surface:
+  - new review submitted
+  - new comment on a PR opened by a WARD harness
+  - new commit pushed by a teammate
+- Events: `git.pr_commented`, `git.pr_reviewed`
+- Surfaces in the originating session view + Overview "needs your
+  attention" card.
+- When user is `away`, Alert composer routes a notification through the
+  preferred remote channel.
+
 ### Tunneling guide
 
 - Documentation in `docs/operations/remote-access.md` covering:

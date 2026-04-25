@@ -75,6 +75,56 @@ be exercised end-to-end.
   completion or failure.
 - Used for end-to-end tests and for UI demo without external deps.
 
+### Harness extension seam
+
+Implement the `HarnessAdapter` contract from
+[`001/extension-seams.md`](001/extension-seams.md). Ship the simulated
+adapter and the PTY / headless primitives; real adapters (Claude Code,
+Codex, SDK, API) land in 008 by implementing the same interface.
+
+### Incognito sessions
+
+- New field on `HarnessLaunch`: `incognito: boolean` (default false).
+- Effects when `true`:
+  - Session events persist to SQLite but are marked `incognito=1`.
+  - Handoff writer (005) does **not** update wiki for this session.
+  - Session does not appear in default list queries; requires `--include-incognito`.
+  - Search (004) excludes incognito sessions.
+  - Outcomes from incognito sessions are excluded from the learning loop (011).
+- Use case: quick exploratory tangents that shouldn't clutter memory.
+
+### Undo / session revert
+
+- New command: `ward session revert <id>` (and UI button).
+- Semantics:
+  - For file writes inside the linked repo: create a revert patch of the
+    diff introduced by that session; apply to working tree; emit
+    `session.reverted` event.
+  - For PR creation: close the PR via GitHub MCP (destructive-gated).
+  - For wiki writes: `git revert <commit>` on the wiki repo.
+  - For outside-repo writes (via explicit approval): revert requires
+    explicit confirmation; WARD lists the paths and asks.
+- Records a reverse-outcome so learning doesn't penalize the original
+  brain twice.
+
+### Durable queue
+
+- Per-workspace serial queue + global cap persist to SQLite (`queue_entry`
+  table). `queued-but-not-started` sessions survive Runtime restart and
+  resume on next boot.
+- Queue position is observable via `ward queue` and in the UI Sessions
+  sidebar.
+
+### SSE backpressure
+
+- Events flowing from a busy harness to the UI pass through an
+  event-coalescing middleware:
+  - `worker.message_delta` events coalesce up to 30 fps
+  - `fs.file_written` events coalesce per-file within 200 ms
+  - Other event types pass through
+- Per-client max-rate; clients over cap get a `stream.throttled` marker
+  and a brief pause; never dropped silently.
+
 ### API
 
 - `POST /api/sessions` — launch
@@ -128,6 +178,14 @@ be exercised end-to-end.
 7. Global concurrency cap honored across workspaces.
 8. Full event stream for a stub session matches the canonical event
    taxonomy.
+9. Incognito session: no wiki update, not in default list, not in search,
+   not in learning inputs.
+10. `ward session revert` on a stub session with fake file writes
+    restores the tree; emits `session.reverted`.
+11. Queued session survives daemon restart and dequeues on next start.
+12. Backpressure: high-throughput stub emits 10k events/s; UI client
+    receives coalesced stream at or below its configured cap, no data
+    loss on the persistence path.
 
 ## Deliverables
 

@@ -58,6 +58,37 @@ Entities per 001 data-model section, refined:
 - Store extracted text alongside original; used later by Plan Mode (006).
 - Reject other types with a clear message.
 
+### AttachmentIngestor interface (extension seam)
+
+Implement the `AttachmentIngestor` contract from
+[`001/extension-seams.md`](001/extension-seams.md):
+
+```ts
+interface AttachmentIngestor {
+  readonly kinds: string[];        // ["pdf", "application/pdf"]
+  extractText(file: Path): Promise<ExtractedText>;
+  extractMetadata?(file: Path): Promise<Record<string, unknown>>;
+}
+```
+
+Ship three default impls (`MarkdownIngestor`, `PlainTextIngestor`,
+`PdfTextIngestor`) registered by kind in
+`packages/core/attachments/ingestors/`. Future ingestors (URL, image OCR,
+audio transcribe, email-thread) add one file without touching the
+attachment API.
+
+### Task.external_ref for PM tool integration
+
+- Add `external_ref_json` column to `task` table: optional JSON
+  `{ provider, external_id, url }` pointing at a PM tool's native task
+  (Linear issue, GitHub issue, Jira ticket, Notion row).
+- When set, the UI and CLI show the PM link and sync status.
+- Actual PM MCP integration lands in 009; this task only provisions the
+  column and repository methods.
+- Supports the **hybrid source-of-truth** pattern: WARD owns ephemeral
+  session tasks; PM tool owns roadmap. Generated tasks from Plan Mode
+  (006) can publish outward via MCP and record the `external_ref`.
+
 ### API endpoints
 
 - `POST /api/workspaces` — create

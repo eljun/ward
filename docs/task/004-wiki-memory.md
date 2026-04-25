@@ -15,6 +15,40 @@ wire basic wiki I/O into the Runtime.
 
 ## In Scope
 
+### Extension seams (Persistence layer)
+
+This task ships the first implementations of three Persistence-layer
+seams from [`001/extension-seams.md`](001/extension-seams.md):
+
+- `MemoryBackend` → `GitBackedLocalMemory` (this task's default impl)
+- `SearchBackend` → `SqliteFts5`
+- `CacheBackend` → (referenced; 005 builds the full impl)
+
+All consumers (Orchestration, Plan Mode, Brain context assembly) read and
+write through these interfaces, **never** through file paths or SQL
+directly. The layering lint in 002 enforces this.
+
+```ts
+interface MemoryBackend {
+  read(scope: Scope, page: string): Promise<MemoryPage>;
+  write(scope: Scope, page: string, body: string, author: "user" | "llm"): Promise<void>;
+  append(scope: Scope, page: string, section: string, author: "user" | "llm"): Promise<void>;
+  history(scope: Scope, page: string): Promise<MemoryCommit[]>;
+  snapshot(out: string): Promise<void>;
+}
+
+interface SearchBackend {
+  index(doc: SearchableDoc): Promise<void>;
+  indexBatch(docs: SearchableDoc[]): Promise<void>;
+  query(q: string, opts?: { scope?: Scope; limit?: number }): Promise<SearchHit[]>;
+  rebuild(): Promise<void>;
+}
+```
+
+Future `MemoryBackend` impls (e.g. `ClaudeManagedMemory`, `HybridMemory`)
+and future `SearchBackend` impls (e.g. vector-based) can swap in without
+touching callers.
+
 ### Directory layout
 
 ```
