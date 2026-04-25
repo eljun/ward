@@ -22,6 +22,7 @@ not a seam (see "Integrations vs. Seams" at the bottom).
 | `HarnessAdapter` | Harness | how a worker is launched and observed | per-brain `runtime_kind` in Brain Registry |
 | `ConnectorAdapter` | Connection | non-MCP integrations (fallback; MCP is the default seam) | runtime config |
 | `RemoteChannel` | Communication | inbound + outbound message carrier | `~/.ward/channels.yaml` |
+| `AgentObserver` | Communication | observe coding agents WARD didn't launch (Claude Code, Codex, Cursor, Aider, …) | built-in list + registry |
 | `TriggerSource` | Scheduling | what can fire a playbook or a session | built-in list + registry |
 | `AttachmentIngestor` | Persistence | how an attachment kind becomes extractable text | kind → ingestor registry |
 | `Inferrer` | Learning | domain-specific inference (preferences, routing, playbooks) | built-in list + registry |
@@ -152,6 +153,51 @@ interface RemoteChannel {
 Adding a new carrier (Discord, Signal, iMessage) = one file implementing
 this interface + one registry entry. Rate limiter, allowlist, audit log
 are channel-agnostic and inherited.
+
+### AgentObserver
+
+WARD only sees the full event stream of workers it launches itself. But you
+will run `claude`, `codex`, and other coding agents directly all day, outside
+of WARD. `AgentObserver` is the seam that lets WARD observe those external
+sessions so the peer stays contextually aware regardless of who launched the
+agent.
+
+```ts
+interface AgentObserver {
+  readonly id: string;
+  readonly agent: "claude-code" | "codex" | "cursor" | "aider" | "continue" | "opencode" | string;
+
+  start(bus: EventBus): Promise<void>;
+  stop(): Promise<void>;
+  health(): Promise<HealthStatus>;
+}
+```
+
+Observers translate vendor-native signals into a normalized event family
+(`external_agent.session_started`, `external_agent.message_sent`,
+`external_agent.tool_invoked`, `external_agent.session_ended`) and feed
+them into the same event bus that WARD-launched sessions use. The
+Orchestrator's Conversational and Post-session modes consume them through
+the existing paths.
+
+Per-vendor observation surfaces:
+
+| Agent | Native surface used by observer |
+|---|---|
+| Claude Code | `Stop` / `Notification` / `PostToolUse` / `UserPromptSubmit` hooks installed in `~/.claude/hooks.d/`, plus tail of `~/.claude/projects/<hash>/<session>.jsonl` |
+| Codex | tail of `~/.codex/sessions/<id>/` rollout files |
+| Aider | `chokidar`-watch of `.aider.chat.history.md` in known repo paths |
+| Cursor | tiny VS Code extension (post-MVP) talking to WARD over loopback |
+| Continue / OpenCode | each ships an observer reading its own session format |
+
+Companion: outgoing context flows the other way through
+**WARD-as-MCP-server** (see `mcp-registry.md`) — any MCP-aware agent can
+pull WARD's wiki, blockers, brief, and plan packets via tool calls. The
+two together form a bidirectional context loop: WARD observes the agent;
+the agent reads WARD's memory.
+
+Shipped impls in 011: `ClaudeCodeObserver`, `CodexObserver`. Others
+plug in later without touching downstream consumers.
 
 ### TriggerSource
 

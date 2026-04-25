@@ -50,6 +50,74 @@ Learning happens through state and memory updates — not fine-tuning.
 - Suggestions surface as banners in Settings → Brains; user accepts to
   modify `routing:` config
 
+### AgentObserver registry (Communication layer)
+
+Implement the `AgentObserver` extension seam from
+[`001/extension-seams.md`](001/extension-seams.md) so WARD has context
+on coding agents the user runs **outside** WARD. This is essential to
+the peer-developer experience: most of the user's day is spent in
+`claude` and `codex` directly, not in WARD-launched sessions.
+
+Shipped observers in this task:
+
+- **`ClaudeCodeObserver`**:
+  - On install, writes hook scripts to `~/.claude/hooks.d/` (`Stop`,
+    `Notification`, `PostToolUse`, `UserPromptSubmit`) — each is a
+    short `curl` POST to WARD loopback with the device token.
+  - Also tails `~/.claude/projects/<hash>/<session>.jsonl` for full
+    transcript content.
+  - Maps `cwd` to a workspace via `workspace_repo.local_path`.
+- **`CodexObserver`**:
+  - Watches `~/.codex/sessions/` for new rollout files.
+  - Tails the active rollout for events; parses Codex's event JSON
+    format to WARD events.
+  - Same workspace mapping by repo path.
+
+Both observers normalize to the canonical `external_agent.*` event
+family and flow into the same event bus used by WARD-launched sessions.
+Post-session mode runs at session end (Stop hook for Claude Code; rollout
+end-marker for Codex), writing summaries to wiki and invalidating warm
+cache like any other session.
+
+#### Unmapped repos
+
+When an external agent runs in a `cwd` not linked to any WARD workspace:
+
+- Events are still ingested but tagged `workspace_id: null`.
+- The next time the user opens WARD, an "Unmapped activity" card surfaces:
+  "I noticed you ran `claude` in `~/Code/random-experiment` — want to
+  make it a workspace?"
+- Preference `external.unmapped_repo_prompt` (default `on`) controls the
+  card. Off → events go to the Unmapped bucket silently.
+
+#### Private / incognito external sessions
+
+- **Wrapper alias**: `ward install-aliases` creates `claude-private` and
+  `codex-private` shell aliases that run the agent with hooks disabled
+  for that invocation (env var skips the WARD POST inside the hook script).
+- **Inline token**: a prompt starting with `[private]` or containing
+  `<ward:private>` flags the session as incognito at observation time.
+  The observer still ingests events for live event-bus consumers but
+  does not write to wiki, does not feed the learning loop, and does not
+  appear in default session lists.
+
+#### Volume coalescing
+
+External activity volume can dwarf WARD-launched sessions. To keep cost
+and noise bounded:
+
+- **Threshold for Post-session writes**: only sessions with ≥ 3 turns OR
+  ≥ 2 minutes wall-clock trigger a Post-session Brain call and a
+  per-session wiki entry. Below threshold → one-line entry in
+  `sessions.md` log only.
+- **Daily rollup**: short below-threshold sessions accumulate; an
+  end-of-day `Silent`-mode rollup writes a single digest entry per
+  workspace per day.
+- **Workspace soft cap**: configurable per-workspace daily limit on
+  Post-session Brain calls (default 50/day). Excess sessions roll into
+  the daily digest only. Quota events emitted per
+  [`001/quota.md`](001/quota.md).
+
 ### Unified TriggerSource registry (Scheduling layer)
 
 Implement the `TriggerSource` extension seam from
@@ -159,6 +227,18 @@ rather than a refactor.
    trigger required.
 7. All learned data is namespaced by scope (global / workspace) and
    inspectable.
+8. `ward install-aliases` writes `claude-private` and `codex-private`
+   aliases; using them produces incognito events that do not write to
+   wiki and do not feed the learning loop.
+9. `ClaudeCodeObserver` end-to-end: launching `claude` in a linked-repo
+   `cwd` with hooks installed produces events on WARD's bus; session
+   end writes a wiki summary; warm cache invalidates.
+10. `CodexObserver` end-to-end equivalent.
+11. Unmapped-repo card appears on next WARD open when an external
+    agent runs in a `cwd` not linked to any workspace.
+12. Volume threshold: a sub-threshold external session writes a single
+    log line, no Post-session Brain call. Above threshold writes a full
+    summary.
 
 ## Deliverables
 

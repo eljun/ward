@@ -110,7 +110,7 @@ two used to be conflated and are now explicitly split.
 | **Connection (MCP)** | three-scope MCP registry (global / workspace / repo), server lifecycle, tool routing + allowlist, secret injection, WARD-as-MCP-server | MCP protocol; `ConnectorAdapter` fallback |
 | **Brain** | pluggable LLMs, Brain Registry, per-concern routing, cost accounting | `BrainAdapter` |
 | **Harness** | worker runtime adapters (CLI / SDK / API / local / simulated), lifecycle state machine, watchdog, artifact capture | `HarnessAdapter` |
-| **Communication** | remote channels, inbound listener, outbound composer, rate limiting, audit | `RemoteChannel` |
+| **Communication** | remote channels, inbound listener, outbound composer, rate limiting, audit; **observers for external agents WARD didn't launch** (Claude Code / Codex / Aider / etc.) so the peer stays context-aware regardless of who started the session | `RemoteChannel`, `AgentObserver` |
 | **Scheduling** | unified trigger registry (cron, git, PR, CI, file, presence, inbound, webhook), playbook engine | `TriggerSource` |
 | **Learning** | outcome capture, inference engines, routing advisor, playbook miner — all shadow-then-confirm | `Inferrer` |
 | **Orchestration** | context packet assembly, mode selection, intent parsing, autonomy gates, Plan Mode engine, presence service — the conductor | `AutonomyPolicy` |
