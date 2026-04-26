@@ -132,8 +132,108 @@ type Overview = {
   };
 };
 
+type PlanRoundName = "context" | "proposal" | "critique" | "convergence" | "decision";
+
+type PlanRoundOutput =
+  | {
+      round: "context";
+      participant_id: string;
+      acknowledged: boolean;
+      clarifying_questions: string[];
+      missing_context: string[];
+    }
+  | {
+      round: "proposal";
+      participant_id: string;
+      approach_name: string;
+      summary: string;
+      architecture_sketch: string;
+      sequence: string[];
+      risks: string[];
+      effort_estimate: string;
+      assumptions: string[];
+    }
+  | {
+      round: "critique";
+      participant_id: string;
+      reviews: Array<{
+        target_participant_id: string;
+        strengths: string[];
+        weaknesses: string[];
+        questions: string[];
+      }>;
+    }
+  | {
+      round: "convergence";
+      participant_id: string;
+      ranking: string[];
+      top_pick_rationale: string;
+      remaining_concerns: string[];
+    };
+
+type PlanPacket = {
+  packet_id: string;
+  version: number;
+  status: "draft" | "waiting_for_user" | "approved" | "superseded" | "aborted";
+  title: string;
+  summary: string;
+  goals: string[];
+  risks: Array<{ risk: string; likelihood: "low" | "med" | "high"; mitigation: string }>;
+  tasks: Array<{
+    title: string;
+    description: string;
+    acceptance_criteria: string[];
+    assignee_hint: string;
+    phase: string;
+    priority: string;
+  }>;
+  first_recommended_action: string;
+  source: {
+    participants: Array<{ brain_id: string; role: string }>;
+    round_transcripts: string[];
+    attachments_considered: string[];
+    repo_snapshot_ref?: string | null;
+    convergence_policy?: string;
+  };
+};
+
+type PlanDetail = {
+  session: {
+    id: string;
+    workspace_slug: string;
+    status: "draft" | "waiting_for_user" | "approved" | "superseded" | "aborted";
+    current_round: PlanRoundName;
+    prompt: string;
+    convergence_policy: string;
+    clarifying_questions: string[];
+    user_answers: string[];
+    packet_id: string | null;
+    updated_at: string;
+  };
+  packet: PlanPacket | null;
+  rounds: Array<{
+    id: string;
+    round_index: number;
+    round_name: PlanRoundName;
+    moderator_summary: string;
+    participants_json: PlanRoundOutput[];
+    file_path: string;
+  }>;
+};
+
+type RepoSnapshot = {
+  id: string;
+  local_path: string;
+  branch: string | null;
+  head_commit: string | null;
+  key_files: string[];
+  symbols: Array<{ path: string; name: string; kind: string }>;
+  refreshed_at: string;
+};
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
+    cache: "no-store",
     ...init,
     headers: {
       ...(init?.body instanceof FormData ? {} : { "content-type": "application/json" }),
@@ -195,6 +295,32 @@ function speak(text: string, profile: Overview["profile"] | null) {
   window.speechSynthesis.speak(utterance);
 }
 
+function participantSummary(output: PlanRoundOutput): string {
+  if (output.round === "context") {
+    return output.clarifying_questions[0] ?? "Context acknowledged.";
+  }
+  if (output.round === "proposal") {
+    return output.summary;
+  }
+  if (output.round === "critique") {
+    return output.reviews.flatMap((review) => review.weaknesses).slice(0, 2).join(" ") || "No blocking critique.";
+  }
+  return output.top_pick_rationale;
+}
+
+function participantMeta(output: PlanRoundOutput): string {
+  if (output.round === "proposal") {
+    return `${output.approach_name} · ${output.effort_estimate}`;
+  }
+  if (output.round === "critique") {
+    return `${output.reviews.length} reviews`;
+  }
+  if (output.round === "convergence") {
+    return `ranked ${output.ranking.join(", ")}`;
+  }
+  return output.acknowledged ? "acknowledged" : "pending";
+}
+
 function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -212,6 +338,11 @@ function App() {
   const [wikiBody, setWikiBody] = useState("");
   const [commits, setCommits] = useState<WikiCommit[]>([]);
   const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
+  const [plans, setPlans] = useState<PlanDetail[]>([]);
+  const [selectedPlanId, setSelectedPlanId] = useState("");
+  const [planDetail, setPlanDetail] = useState<PlanDetail | null>(null);
+  const [repoSnapshots, setRepoSnapshots] = useState<RepoSnapshot[]>([]);
+  const [planBusy, setPlanBusy] = useState<"" | "start" | "clear" | "answer" | "approve" | "revise" | "generate" | "refresh-context">("");
 
   const selectedWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.slug === selectedSlug) ?? null,
@@ -240,6 +371,41 @@ function App() {
     }
     const response = await api<WorkspaceDetail>(`/api/workspaces/${slug}`);
     setDetail(response);
+  }
+
+  async function readPlan(planId: string) {
+    const response = await api<{ plan: PlanDetail }>(`/api/plan/${encodeURIComponent(planId)}`);
+    setPlanDetail(response.plan);
+    setSelectedPlanId(response.plan.packet?.packet_id ?? response.plan.session.id);
+  }
+
+  async function refreshPlanSurface(slug = selectedSlug, preferredPlanId = selectedPlanId) {
+    if (!slug) {
+      setPlans([]);
+      setSelectedPlanId("");
+      setPlanDetail(null);
+      setRepoSnapshots([]);
+      return;
+    }
+
+    const planResponse = await api<{ plans: PlanDetail[] }>(`/api/plan?workspace=${encodeURIComponent(slug)}`);
+    setPlans(planResponse.plans);
+    const nextPlanId = planResponse.plans.find((plan) => (plan.packet?.packet_id ?? plan.session.id) === preferredPlanId)
+      ? preferredPlanId
+      : planResponse.plans[0]
+        ? planResponse.plans[0].packet?.packet_id ?? planResponse.plans[0].session.id
+        : "";
+    setSelectedPlanId(nextPlanId);
+    if (nextPlanId) {
+      const selected = planResponse.plans.find((plan) => (plan.packet?.packet_id ?? plan.session.id) === nextPlanId);
+      setPlanDetail(selected ?? null);
+    } else {
+      setPlanDetail(null);
+    }
+
+    const snapshotResponse = await api<{ snapshots: RepoSnapshot[] }>(`/api/workspaces/${encodeURIComponent(slug)}/repo-snapshots`)
+      .catch(() => ({ snapshots: [] }));
+    setRepoSnapshots(snapshotResponse.snapshots);
   }
 
   async function readMemoryPage(scope: string, page: string) {
@@ -281,6 +447,7 @@ function App() {
 
   useEffect(() => {
     refreshDetail(selectedSlug).catch((err) => setError(err.message));
+    refreshPlanSurface(selectedSlug).catch((err) => setError(err.message));
   }, [selectedSlug]);
 
   useEffect(() => {
@@ -371,6 +538,181 @@ function App() {
     await refreshDetail(selectedWorkspace.slug);
   }
 
+  function activePlanRef(): string {
+    return planDetail?.packet?.packet_id ?? planDetail?.session.id ?? selectedPlanId;
+  }
+
+  async function startPlan(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedWorkspace) {
+      return;
+    }
+    setPlanBusy("start");
+    const form = new FormData(event.currentTarget);
+    const prompt = String(form.get("prompt") ?? "").trim();
+    try {
+      const response = await api<{ plan: PlanDetail }>(`/api/plan/${encodeURIComponent(selectedWorkspace.slug)}/start`, {
+        method: "POST",
+        body: JSON.stringify({
+          prompt: prompt || undefined,
+          convergence_policy: String(form.get("policy") ?? "consensus"),
+          force_clarification: form.get("clarify") === "on"
+        })
+      });
+      const nextId = response.plan.packet?.packet_id ?? response.plan.session.id;
+      event.currentTarget.reset();
+      setSelectedPlanId(nextId);
+      setPlanDetail(response.plan);
+      setMessage(response.plan.session.status === "waiting_for_user" ? "Plan Mode is waiting for your answer." : "Plan packet drafted.");
+      await refreshPlanSurface(selectedWorkspace.slug, nextId);
+    } finally {
+      setPlanBusy("");
+    }
+  }
+
+  async function answerPlan(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const planId = activePlanRef();
+    if (!planId) {
+      return;
+    }
+    setPlanBusy("answer");
+    const form = new FormData(event.currentTarget);
+    const answer = String(form.get("answer") ?? "").trim();
+    if (!answer) {
+      setPlanBusy("");
+      return;
+    }
+    try {
+      const response = await api<{ plan: PlanDetail }>(`/api/plan/${encodeURIComponent(planId)}/answer`, {
+        method: "POST",
+        body: JSON.stringify({ answer })
+      });
+      const nextId = response.plan.packet?.packet_id ?? response.plan.session.id;
+      event.currentTarget.reset();
+      setSelectedPlanId(nextId);
+      setPlanDetail(response.plan);
+      setMessage("Plan Mode answer recorded.");
+      await refreshPlanSurface(selectedSlug, nextId);
+    } finally {
+      setPlanBusy("");
+    }
+  }
+
+  async function approvePlanPacket() {
+    const planId = activePlanRef();
+    if (!planId) {
+      return;
+    }
+    setPlanBusy("approve");
+    try {
+      const response = await api<{ plan: PlanDetail }>(`/api/plan/${encodeURIComponent(planId)}/approve`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      const nextId = response.plan.packet?.packet_id ?? response.plan.session.id;
+      setSelectedPlanId(nextId);
+      setPlanDetail(response.plan);
+      setMessage("Plan approved and written to wiki memory.");
+      await refreshPlanSurface(selectedSlug, nextId);
+      const scope = `workspace/${response.plan.session.workspace_slug}`;
+      setMemoryScope(scope);
+      await refreshMemory(scope, `plans/${nextId}.md`).catch(() => undefined);
+    } finally {
+      setPlanBusy("");
+    }
+  }
+
+  async function revisePlanPacket(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const planId = activePlanRef();
+    if (!planId) {
+      return;
+    }
+    setPlanBusy("revise");
+    const form = new FormData(event.currentTarget);
+    const notes = String(form.get("notes") ?? "").trim();
+    if (!notes) {
+      setPlanBusy("");
+      return;
+    }
+    try {
+      const response = await api<{ plan: PlanDetail }>(`/api/plan/${encodeURIComponent(planId)}/revise`, {
+        method: "POST",
+        body: JSON.stringify({ notes })
+      });
+      const nextId = response.plan.packet?.packet_id ?? response.plan.session.id;
+      event.currentTarget.reset();
+      setSelectedPlanId(nextId);
+      setPlanDetail(response.plan);
+      setMessage("Plan revision drafted.");
+      await refreshPlanSurface(selectedSlug, nextId);
+    } finally {
+      setPlanBusy("");
+    }
+  }
+
+  async function generatePlanTasks() {
+    const planId = activePlanRef();
+    if (!planId) {
+      return;
+    }
+    setPlanBusy("generate");
+    try {
+      await api(`/api/plan/${encodeURIComponent(planId)}/generate-tasks`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      setMessage("Plan tasks generated.");
+      await refresh();
+      await refreshDetail(selectedSlug);
+      await refreshPlanSurface(selectedSlug, planId);
+    } finally {
+      setPlanBusy("");
+    }
+  }
+
+  async function refreshCodeContext() {
+    if (!selectedWorkspace) {
+      return;
+    }
+    setPlanBusy("refresh-context");
+    try {
+      const response = await api<{ snapshots: RepoSnapshot[] }>(`/api/workspaces/${encodeURIComponent(selectedWorkspace.slug)}/refresh`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      setRepoSnapshots(response.snapshots);
+      setMessage("Workspace code context refreshed.");
+    } finally {
+      setPlanBusy("");
+    }
+  }
+
+  async function clearPlans() {
+    if (!selectedWorkspace) {
+      return;
+    }
+    const confirmed = window.confirm(`Clear all Plan Mode history for ${selectedWorkspace.name}? Generated tasks will stay in place.`);
+    if (!confirmed) {
+      return;
+    }
+    setPlanBusy("clear");
+    try {
+      await api(`/api/plan/${encodeURIComponent(selectedWorkspace.slug)}/clear`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      setSelectedPlanId("");
+      setPlanDetail(null);
+      setMessage("Workspace plans cleared.");
+      await refreshPlanSurface(selectedWorkspace.slug, "");
+      await refreshMemory(memoryScope, "").catch(() => undefined);
+    } finally {
+      setPlanBusy("");
+    }
+  }
+
   async function saveWikiPage() {
     if (!selectedPage) {
       return;
@@ -404,6 +746,12 @@ function App() {
     setMessage("Warm cache refreshed.");
   }
 
+  const planRounds: PlanRoundName[] = ["context", "proposal", "critique", "convergence", "decision"];
+  const latestRound = planDetail?.rounds[planDetail.rounds.length - 1] ?? null;
+  const latestSnapshot = repoSnapshots[0] ?? null;
+  const planIsDraft = planDetail?.packet?.status === "draft";
+  const planIsApproved = planDetail?.packet?.status === "approved";
+
   return (
     <main className="shell">
       <header className="topbar">
@@ -411,7 +759,7 @@ function App() {
           <p className="eyebrow">WARD</p>
           <h1>Command Center</h1>
         </div>
-        <button type="button" onClick={() => refresh().catch((err) => setError(err.message))}>
+        <button type="button" onClick={() => refresh().then(() => refreshPlanSurface()).catch((err) => setError(err.message))}>
           Refresh
         </button>
       </header>
@@ -622,6 +970,163 @@ function App() {
               <div className="item static" key={attachment.id}>
                 <strong>{attachment.name}</strong>
                 <span>{attachment.kind} · {attachment.bytes} bytes</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </section>
+
+      <section className="plan-grid">
+        <section className="panel plan-sidebar">
+          <div className="panel-title">
+            <h2>Plan Mode</h2>
+            <span>{plans.length}</span>
+          </div>
+          <form className="stack" onSubmit={(event) => startPlan(event).catch((err) => setError(err.message))}>
+            <input name="prompt" placeholder="Plan prompt" disabled={!selectedWorkspace} />
+            <div className="plan-controls">
+              <select name="policy" defaultValue="consensus" disabled={!selectedWorkspace}>
+                <option value="consensus">Consensus</option>
+                <option value="coordinator_decides">Coordinator decides</option>
+                <option value="user_decides">User decides</option>
+              </select>
+              <label className="check-row small-check">
+                <input name="clarify" type="checkbox" disabled={!selectedWorkspace} />
+                Clarify
+              </label>
+            </div>
+            <div className="start-actions">
+              <button type="submit" disabled={!selectedWorkspace || planBusy !== ""}>
+                {planBusy === "start" ? "Starting..." : "Start"}
+              </button>
+              <button type="button" disabled={!selectedWorkspace || plans.length === 0 || planBusy !== ""} onClick={() => clearPlans().catch((err) => setError(err.message))}>
+                {planBusy === "clear" ? "Clearing..." : "Clear Plans"}
+              </button>
+            </div>
+          </form>
+          <div className="list compact">
+            {plans.map((plan) => {
+              const planId = plan.packet?.packet_id ?? plan.session.id;
+              return (
+                <button
+                  className={planId === selectedPlanId ? "item active" : "item"}
+                  key={plan.session.id}
+                  type="button"
+                  onClick={() => readPlan(planId).catch((err) => setError(err.message))}
+                >
+                  <strong>{plan.packet?.title ?? plan.session.prompt}</strong>
+                  <span>{plan.packet?.status ?? plan.session.status} · {plan.session.current_round}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="snapshot-card">
+            <div className="panel-title">
+              <h2>Code Context</h2>
+              <span>{repoSnapshots.length}</span>
+            </div>
+            <button type="button" disabled={!selectedWorkspace || planBusy !== ""} onClick={() => refreshCodeContext().catch((err) => setError(err.message))}>
+              {planBusy === "refresh-context" ? "Refreshing..." : "Refresh"}
+            </button>
+            {latestSnapshot && (
+              <div className="snapshot-meta">
+                <strong>{latestSnapshot.branch ?? "unknown branch"}</strong>
+                <span>{latestSnapshot.head_commit?.slice(0, 12) ?? "no head"} · {latestSnapshot.key_files.length} key files</span>
+                <small>{latestSnapshot.key_files.slice(0, 6).join(", ") || latestSnapshot.local_path}</small>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="panel plan-review">
+          <div className="panel-title">
+            <h2>{planDetail?.packet?.title ?? "Decision Review"}</h2>
+            <span>{planDetail?.packet?.status ?? planDetail?.session.status ?? "idle"}</span>
+          </div>
+          <div className="round-rail">
+            {planRounds.map((round) => {
+              const completed = Boolean(planDetail?.rounds.some((item) => item.round_name === round));
+              const active = planDetail?.session.current_round === round;
+              return <span className={`${completed ? "done" : ""} ${active ? "active" : ""}`} key={round}>{round}</span>;
+            })}
+          </div>
+          {latestRound ? (
+            <div className="moderator">
+              <strong>{latestRound.round_name}</strong>
+              <p>{latestRound.moderator_summary}</p>
+            </div>
+          ) : (
+            <div className="moderator muted">
+              <strong>No active packet</strong>
+              <p>{selectedWorkspace ? "Start a plan for this workspace." : "Select a workspace first."}</p>
+            </div>
+          )}
+          {planDetail?.session.clarifying_questions.length ? (
+            <form className="answer-form" onSubmit={(event) => answerPlan(event).catch((err) => setError(err.message))}>
+              <div className="question-stack">
+                {planDetail.session.clarifying_questions.map((question) => <strong key={question}>{question}</strong>)}
+              </div>
+              <input name="answer" placeholder="Answer" required disabled={planBusy !== ""} />
+              <button type="submit" disabled={planBusy !== ""}>
+                {planBusy === "answer" ? "Answering..." : "Answer"}
+              </button>
+            </form>
+          ) : null}
+          {planDetail?.packet && (
+            <div className="packet">
+              <p>{planDetail.packet.summary}</p>
+              <div className="packet-columns">
+                <div>
+                  <h3>Goals</h3>
+                  <ul>{planDetail.packet.goals.map((goal) => <li key={goal}>{goal}</li>)}</ul>
+                </div>
+                <div>
+                  <h3>Risks</h3>
+                  <ul>{planDetail.packet.risks.map((risk) => <li key={risk.risk}>{risk.risk}</li>)}</ul>
+                </div>
+              </div>
+              <div className="task-chips">
+                {planDetail.packet.tasks.map((task) => (
+                  <span key={task.title}>{task.title}</span>
+                ))}
+              </div>
+              <div className="source-line">
+                <span>{planDetail.packet.source.participants.length} participants</span>
+                <span>{planDetail.packet.source.round_transcripts.length} transcripts</span>
+                <span>{planDetail.packet.source.attachments_considered.length} attachments</span>
+              </div>
+            </div>
+          )}
+          <div className="plan-actions">
+            <button type="button" disabled={!planIsDraft || planBusy !== ""} onClick={() => approvePlanPacket().catch((err) => setError(err.message))}>
+              {planBusy === "approve" ? "Approving..." : "Approve"}
+            </button>
+            <button type="button" disabled={!planIsApproved || planBusy !== ""} onClick={() => generatePlanTasks().catch((err) => setError(err.message))}>
+              {planBusy === "generate" ? "Generating..." : "Generate Tasks"}
+            </button>
+            <button type="button" disabled={!activePlanRef() || planBusy !== ""} onClick={() => readPlan(activePlanRef()).catch((err) => setError(err.message))}>
+              Reload
+            </button>
+          </div>
+          <form className="revision-form" onSubmit={(event) => revisePlanPacket(event).catch((err) => setError(err.message))}>
+            <input name="notes" placeholder="Revision notes" disabled={!planDetail?.packet || planBusy !== ""} />
+            <button type="submit" disabled={!planDetail?.packet || planBusy !== ""}>
+              {planBusy === "revise" ? "Revising..." : "Revise"}
+            </button>
+          </form>
+        </section>
+
+        <section className="panel plan-participants">
+          <div className="panel-title">
+            <h2>Participants</h2>
+            <span>{latestRound?.participants_json.length ?? 0}</span>
+          </div>
+          <div className="list compact">
+            {latestRound?.participants_json.map((output) => (
+              <div className="item static" key={`${latestRound.id}-${output.participant_id}`}>
+                <strong>{output.participant_id}</strong>
+                <span>{participantMeta(output)}</span>
+                <small>{participantSummary(output)}</small>
               </div>
             ))}
           </div>

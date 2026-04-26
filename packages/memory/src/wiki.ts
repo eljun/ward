@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
 import {
   MemoryCommitSchema,
@@ -283,13 +283,26 @@ async function writeSeedFiles(paths: WardPaths): Promise<boolean> {
 }
 
 function commitIfChanged(paths: WardPaths, relPaths: string[], author: WikiAuthor, message: string): boolean {
-  git(paths, ["add", "--", ...relPaths], { author });
+  git(paths, ["add", "-A", "--", ...relPaths], { author });
   const status = git(paths, ["status", "--porcelain", "--", ...relPaths], { author }).stdout.trim();
   if (!status) {
     return false;
   }
   git(paths, ["commit", "-m", message], { author });
   return true;
+}
+
+function deleteSearchDocs(db: Database, docIds: string[]): void {
+  if (docIds.length === 0) {
+    return;
+  }
+  const remove = db.transaction((ids: string[]) => {
+    for (const docId of ids) {
+      db.query("DELETE FROM search_document WHERE doc_id = ?").run(docId);
+      db.query("DELETE FROM search_document_fts WHERE doc_id = ?").run(docId);
+    }
+  });
+  remove(docIds);
 }
 
 function authorFromSubject(subject: string): "user" | "llm" | "system" {
@@ -676,6 +689,44 @@ export class GitBackedLocalMemory implements MemoryBackend {
     return this.write(scope, page, nextBody, author, summary ?? `wiki: append ${scopeKey(scope)}/${normalizePage(page)}`);
   }
 
+  async deletePages(scopeInput: MemoryScope, pagesInput: string[], author: WikiAuthor, summary?: string): Promise<string[]> {
+    await ensureMemoryBootstrap(this.paths);
+    const scope = MemoryScopeSchema.parse(scopeInput);
+    const deleted: Array<{ relativePage: string; gitRelative: string }> = [];
+
+    for (const pageInput of pagesInput) {
+      const { absolute, relativePage, gitRelative } = pagePath(this.paths, scope, pageInput);
+      if (!existsSync(absolute)) {
+        continue;
+      }
+      await rm(absolute, { force: true });
+      deleted.push({ relativePage, gitRelative });
+    }
+
+    if (deleted.length === 0) {
+      return [];
+    }
+
+    commitIfChanged(
+      this.paths,
+      deleted.map((item) => item.gitRelative),
+      author,
+      commitMessage(author, `wiki: delete ${scopeKey(scope)} pages`, summary)
+    );
+
+    await withDbPathAsync(this.paths, async (db) => {
+      deleteSearchDocs(db, deleted.map((item) => `wiki:${scopeKey(scope)}:${item.relativePage}`));
+      recordSystemEvent(db, "wiki.page_deleted", {
+        scope: scopeKey(scope),
+        workspace_id: workspaceIdForScope(db, scope),
+        pages: deleted.map((item) => item.relativePage),
+        author
+      });
+    });
+
+    return deleted.map((item) => item.relativePage);
+  }
+
   async history(scopeInput: MemoryScope, pageInput: string): Promise<MemoryCommit[]> {
     await ensureMemoryBootstrap(this.paths);
     const scope = MemoryScopeSchema.parse(scopeInput);
@@ -716,6 +767,10 @@ export async function writeWikiPage(scope: string, page: string, body: string, a
 
 export async function appendWikiPage(scope: string, page: string, section: string, author: WikiAuthor, summary?: string): Promise<MemoryPage> {
   return new GitBackedLocalMemory().append(parseMemoryScope(scope), page, section, author, summary);
+}
+
+export async function deleteWikiPages(scope: string, pages: string[], author: WikiAuthor, summary?: string): Promise<string[]> {
+  return new GitBackedLocalMemory().deletePages(parseMemoryScope(scope), pages, author, summary);
 }
 
 export async function wikiPageHistory(scope: string, page: string): Promise<MemoryCommit[]> {

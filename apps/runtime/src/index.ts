@@ -8,8 +8,11 @@ import {
   CreateWorkspaceSchema,
   OpenGateSchema,
   ProfilePatchSchema,
+  AnswerPlanSchema,
+  RevisePlanSchema,
   SearchQuerySchema,
   SimulateSessionSchema,
+  StartPlanSchema,
   TransitionTaskSchema,
   UpdateWorkspaceSchema,
   WARD_VERSION,
@@ -27,9 +30,14 @@ import {
   createSimulatedSession,
   createWorkspace,
   createLogger,
+  clearWorkspacePlans,
+  abortPlan,
+  answerPlan,
+  approvePlan,
   ensureDeviceToken,
   ensureMemoryBootstrap,
   ensureWardLayout,
+  ensurePlanRuntimeWatchers,
   findAvailablePort,
   getCurrentSchemaVersion,
   getProfile,
@@ -39,19 +47,24 @@ import {
   getDailyBrief,
   getHandoff,
   getOverview,
+  getPlanDetail,
   getWorkspaceByIdOrSlug,
   getWorkspaceDetail,
+  generateTasksFromPlan,
   ingestAttachmentBuffer,
   ingestAttachmentFromPath,
   isPortAvailable,
   lintWiki,
   listWikiPages,
   listPreferences,
+  listPlans,
+  listRepoSnapshots,
   listTasks,
   listWorkspaces,
   openWardDatabase,
   openTaskGate,
   prewarmWarmCache,
+  publishPlanTasksExternal,
   readWikiPage,
   rebuildSearchIndex,
   readDeviceToken,
@@ -62,6 +75,9 @@ import {
   runMigrations,
   searchMemory,
   setPreference,
+  refreshWorkspaceSnapshots,
+  revisePlan,
+  startPlanMode,
   transitionTask,
   updateProfile,
   updateWorkspace,
@@ -93,7 +109,10 @@ function contentType(pathname: string): string {
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" }
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    }
   });
 }
 
@@ -231,6 +250,50 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
       return json({ ok: true, ...await createSimulatedSession(SimulateSessionSchema.parse(await readJson(req))) }, 201);
     }
 
+    if (parts[0] === "plan" && req.method === "GET" && !parts[1]) {
+      return json({ ok: true, plans: listPlans(url.searchParams.get("workspace") ?? undefined) });
+    }
+
+    if (parts[0] === "plan" && parts[1] && parts[2] === "start" && req.method === "POST") {
+      return json({ ok: true, plan: await startPlanMode(parts[1], StartPlanSchema.parse(await readJson(req))) }, 201);
+    }
+
+    if (parts[0] === "plan" && parts[1] && parts[2] === "clear" && req.method === "POST") {
+      return json({ ok: true, cleared: await clearWorkspacePlans(parts[1]) });
+    }
+
+    if (parts[0] === "plan" && parts[1] && req.method === "GET" && !parts[2]) {
+      return json({ ok: true, plan: getPlanDetail(parts[1]) });
+    }
+
+    if (parts[0] === "plan" && parts[1] && parts[2] === "answer" && req.method === "POST") {
+      return json({ ok: true, plan: await answerPlan(parts[1], AnswerPlanSchema.parse(await readJson(req))) });
+    }
+
+    if (parts[0] === "plan" && parts[1] && parts[2] === "approve" && req.method === "POST") {
+      return json({ ok: true, plan: await approvePlan(parts[1]) });
+    }
+
+    if (parts[0] === "plan" && parts[1] && parts[2] === "revise" && req.method === "POST") {
+      return json({ ok: true, plan: await revisePlan(parts[1], RevisePlanSchema.parse(await readJson(req))) });
+    }
+
+    if (parts[0] === "plan" && parts[1] && parts[2] === "abort" && req.method === "POST") {
+      return json({ ok: true, plan: abortPlan(parts[1]) });
+    }
+
+    if (parts[0] === "plan" && parts[1] && parts[2] === "generate-tasks" && req.method === "POST") {
+      return json({ ok: true, ...await generateTasksFromPlan(parts[1]) }, 201);
+    }
+
+    if (parts[0] === "plan" && parts[1] && parts[2] === "publish-tasks-external" && req.method === "POST") {
+      return json({ ok: true, result: await publishPlanTasksExternal(parts[1]) });
+    }
+
+    if (parts[0] === "repo-snapshots" && req.method === "GET") {
+      return json({ ok: true, snapshots: listRepoSnapshots(url.searchParams.get("workspace") ?? undefined) });
+    }
+
     if (parts[0] === "search" && req.method === "GET") {
       const parsed = SearchQuerySchema.parse({
         q: url.searchParams.get("q") ?? "",
@@ -288,6 +351,14 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
 
     if (parts[0] === "workspaces" && parts[1] && req.method === "GET" && !parts[2]) {
       return json({ ok: true, ...getWorkspaceDetail(parts[1]) });
+    }
+
+    if (parts[0] === "workspaces" && parts[1] && parts[2] === "refresh" && req.method === "POST") {
+      return json({ ok: true, snapshots: await refreshWorkspaceSnapshots(parts[1]) });
+    }
+
+    if (parts[0] === "workspaces" && parts[1] && parts[2] === "repo-snapshots" && req.method === "GET") {
+      return json({ ok: true, snapshots: listRepoSnapshots(parts[1]) });
     }
 
     if (parts[0] === "workspaces" && parts[1] && req.method === "PATCH" && !parts[2]) {
@@ -423,6 +494,7 @@ export async function startRuntime(): Promise<void> {
   await ensureMemoryBootstrap(paths);
   await rebuildSearchIndex(paths);
   await prewarmWarmCache("runtime.startup");
+  const planWatcher = await ensurePlanRuntimeWatchers();
 
   const lock = acquireInstanceLock(paths);
   const logger = await createLogger(paths);
@@ -439,6 +511,7 @@ export async function startRuntime(): Promise<void> {
       source: "runtime",
       payload: { reason }
     }));
+    clearInterval(planWatcher);
     server?.stop(true);
     lock.release();
     await unlink(paths.portFile).catch(() => undefined);

@@ -9,12 +9,13 @@ remote messaging for when the developer is away.
 
 ## Status
 
-WARD's architecture is **frozen after Task 001**. Tasks 002 through 005 are
+WARD's architecture is **frozen after Task 001**. Tasks 002 through 006 are
 implemented: the repo contains the Bun + TypeScript runtime skeleton, CLI,
 memory package, Vite command-center shell, workspace/profile state, task
 workflow state, attachment intake, and git-backed wiki memory with local
 full-text search, plus warm-start cache, daily brief, overview, simulated
-handoff writer, and browser-native TTS controls.
+handoff writer, browser-native TTS controls, Plan Mode, plan-backed task
+generation, and repo code-context snapshots.
 
 ## Phase 1 Stance
 
@@ -63,6 +64,10 @@ bun run ward wiki list --scope ward-sandbox
 bun run ward search "workspace state" --scope ward-sandbox
 bun run ward brief
 bun run ward warm stats
+bun run ward workspace refresh ward-sandbox
+bun run ward plan start ward-sandbox --prompt "Plan the next slice"
+bun run ward plan approve <packet-id>
+bun run ward plan generate-tasks <packet-id>
 ```
 
 ## Architecture (one paragraph)

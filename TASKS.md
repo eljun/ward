@@ -2,10 +2,6 @@
 
 ## Planned
 
-- [ ] `6` Plan Mode and Code-Context Service
-  - Doc: [docs/task/006-plan-mode.md](docs/task/006-plan-mode.md)
-  - Goal: 5-round Plan Mode with simulated participants; Plan Packet schema and persistence; Code-Context Service (repo snapshot, symbol map).
-
 - [ ] `7` Harness Abstraction, Lifecycle, and Watchdog
   - Doc: [docs/task/007-harness-lifecycle.md](docs/task/007-harness-lifecycle.md)
   - Goal: Visible (PTY) and headless harness modes; lifecycle state machine; worker status protocol; watchdog; allowlist enforcement; stub worker.
@@ -87,8 +83,31 @@ None
 - runtime-served built UI root returns 200 and serves Vite assets with Overview controls
 - Overview TTS controls support browser voice selection plus persisted rate and pitch; macOS speech prefers `Joelle (Enhanced)` when available
 - `bun run build`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json init`
+- fresh Task 006 init creates schema version 5 and applies `0005_plan_packets.sql`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json up`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json create-workspace "Task Six Smoke" --description "Plan mode smoke" --repo /Users/eleazarjunsan/Code/Personal/ward`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json attach task-six-smoke README.md`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json workspace refresh task-six-smoke`
+- code-context snapshot captures branch, head commit, bounded file tree, key files, recent commits, and symbols
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json plan start task-six-smoke --prompt "Plan Task 006 smoke validation"`
+- Plan Mode completes context, proposal, critique, convergence, and decision rounds with simulated participants
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json plan approve packet_2396233a8ac54f47`
+- approved plan writes `wiki/plans/<packet_id>.md` and commits `[llm] plan: approve <packet_id>`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json plan generate-tasks packet_2396233a8ac54f47`
+- generated tasks include `task_contract` rows and hard-memory task docs with WARD Metadata, Agent Signals, Implementation Claims, QA Evidence, Harness Critique, and Open Risks
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json plan revise packet_2396233a8ac54f47 "Tighten scope before execution."`
+- superseded packet IDs remain readable after revision; new packet is version 2
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json plan start task-six-smoke --prompt "Clarify the planning tradeoff" --clarify`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json plan answer plan_f548fed7e55740b3 "Optimize safety first, then scope."`
+- runtime git watcher refreshed a temp linked repo snapshot from head `7106ed001f23f40285a19f7e6976bd8674919f02` to `3401d8079e33852786bf5b3bd0e367cf40dcecbf` after a commit and 3 s wait
+- runtime restart verified with `ward down`, `ward up`, and `ward plan status packet_2396233a8ac54f47`
 
 ## Done
+
+- [x] `6` Plan Mode and Code-Context Service
+  - Doc: [docs/task/006-plan-mode.md](docs/task/006-plan-mode.md)
+  - Goal: 5-round Plan Mode with simulated participants; Plan Packet schema and persistence; Code-Context Service (repo snapshot, symbol map).
 
 - [x] `5` Warm-Start Pipeline, Overview, Handoff, and TTS
   - Doc: [docs/task/005-warm-start-overview-handoff.md](docs/task/005-warm-start-overview-handoff.md)

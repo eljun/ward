@@ -508,9 +508,31 @@ async function commandWorkspaces(): Promise<CliResult> {
 }
 
 async function commandWorkspace(args: string[]): Promise<CliResult> {
-  const [slug] = args;
+  const [first, ...rest] = args;
+  if (first === "refresh") {
+    const [slug] = rest;
+    if (!slug) {
+      throw new Error("Usage: ward workspace refresh <slug>");
+    }
+    const data = await apiRequest(`/api/workspaces/${encodeURIComponent(slug)}/refresh`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    return { ok: true, command: "workspace refresh", timestamp: nowIso(), message: "Workspace code context refreshed.", data };
+  }
+
+  if (first === "snapshots") {
+    const [slug] = rest;
+    if (!slug) {
+      throw new Error("Usage: ward workspace snapshots <slug>");
+    }
+    const data = await apiRequest(`/api/workspaces/${encodeURIComponent(slug)}/repo-snapshots`);
+    return { ok: true, command: "workspace snapshots", timestamp: nowIso(), message: "Workspace repo snapshots.", data };
+  }
+
+  const slug = first;
   if (!slug) {
-    throw new Error("Usage: ward workspace <slug>");
+    throw new Error("Usage: ward workspace <slug> | ward workspace refresh <slug> | ward workspace snapshots <slug>");
   }
   const data = await apiRequest(`/api/workspaces/${encodeURIComponent(slug)}`);
   return { ok: true, command: "workspace", timestamp: nowIso(), message: "WARD workspace.", data };
@@ -759,6 +781,135 @@ async function commandWarm(args: string[]): Promise<CliResult> {
   return { ok: true, command: "warm", timestamp: nowIso(), message: "WARD warm cache refreshed.", data };
 }
 
+async function commandPlan(args: string[]): Promise<CliResult> {
+  const [subcommand = "list", ...rest] = args;
+
+  if (subcommand === "list") {
+    const parsed = parseFlags(rest);
+    const workspace = stringFlag(parsed.flags, "workspace");
+    const suffix = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
+    const data = await apiRequest(`/api/plan${suffix}`);
+    return { ok: true, command: "plan list", timestamp: nowIso(), message: "WARD plans.", data };
+  }
+
+  if (subcommand === "start") {
+    const parsed = parseFlags(rest);
+    const [workspace, ...promptParts] = parsed.positional;
+    if (!workspace) {
+      throw new Error("Usage: ward plan start <workspace-slug> [prompt] [--prompt ...] [--policy consensus|coordinator_decides|user_decides] [--clarify]");
+    }
+    const prompt = stringFlag(parsed.flags, "prompt") ?? promptParts.join(" ");
+    const data = await apiRequest(`/api/plan/${encodeURIComponent(workspace)}/start`, {
+      method: "POST",
+      body: JSON.stringify({
+        prompt: prompt || undefined,
+        convergence_policy: stringFlag(parsed.flags, "policy"),
+        force_clarification: Boolean(parsed.flags.clarify)
+      })
+    });
+    return { ok: true, command: "plan start", timestamp: nowIso(), message: "Plan Mode started.", data };
+  }
+
+  if (subcommand === "clear") {
+    const [workspace] = rest;
+    if (!workspace) {
+      throw new Error("Usage: ward plan clear <workspace-slug>");
+    }
+    const data = await apiRequest(`/api/plan/${encodeURIComponent(workspace)}/clear`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    return { ok: true, command: "plan clear", timestamp: nowIso(), message: "WARD plans cleared.", data };
+  }
+
+  if (subcommand === "status" || subcommand === "show") {
+    const [planId] = rest;
+    if (!planId) {
+      throw new Error(`Usage: ward plan ${subcommand} <plan-id-or-packet-id>`);
+    }
+    const data = await apiRequest(`/api/plan/${encodeURIComponent(planId)}`);
+    return { ok: true, command: `plan ${subcommand}`, timestamp: nowIso(), message: "WARD plan.", data };
+  }
+
+  if (subcommand === "answer") {
+    const parsed = parseFlags(rest);
+    const [planId, ...answerParts] = parsed.positional;
+    const answer = stringFlag(parsed.flags, "answer") ?? answerParts.join(" ");
+    if (!planId || !answer) {
+      throw new Error("Usage: ward plan answer <plan-id-or-packet-id> <answer> | --answer ...");
+    }
+    const data = await apiRequest(`/api/plan/${encodeURIComponent(planId)}/answer`, {
+      method: "POST",
+      body: JSON.stringify({ answer })
+    });
+    return { ok: true, command: "plan answer", timestamp: nowIso(), message: "Plan Mode answer recorded.", data };
+  }
+
+  if (subcommand === "approve") {
+    const [planId] = rest;
+    if (!planId) {
+      throw new Error("Usage: ward plan approve <plan-id-or-packet-id>");
+    }
+    const data = await apiRequest(`/api/plan/${encodeURIComponent(planId)}/approve`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    return { ok: true, command: "plan approve", timestamp: nowIso(), message: "Plan approved.", data };
+  }
+
+  if (subcommand === "revise") {
+    const parsed = parseFlags(rest);
+    const [planId, ...noteParts] = parsed.positional;
+    const notes = stringFlag(parsed.flags, "notes") ?? noteParts.join(" ");
+    if (!planId || !notes) {
+      throw new Error("Usage: ward plan revise <plan-id-or-packet-id> <notes> | --notes ...");
+    }
+    const data = await apiRequest(`/api/plan/${encodeURIComponent(planId)}/revise`, {
+      method: "POST",
+      body: JSON.stringify({ notes })
+    });
+    return { ok: true, command: "plan revise", timestamp: nowIso(), message: "Plan revised.", data };
+  }
+
+  if (subcommand === "abort") {
+    const [planId] = rest;
+    if (!planId) {
+      throw new Error("Usage: ward plan abort <plan-id-or-packet-id>");
+    }
+    const data = await apiRequest(`/api/plan/${encodeURIComponent(planId)}/abort`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    return { ok: true, command: "plan abort", timestamp: nowIso(), message: "Plan aborted.", data };
+  }
+
+  if (subcommand === "generate-tasks" || subcommand === "tasks") {
+    const [planId] = rest;
+    if (!planId) {
+      throw new Error(`Usage: ward plan ${subcommand} <plan-id-or-packet-id>`);
+    }
+    const data = await apiRequest(`/api/plan/${encodeURIComponent(planId)}/generate-tasks`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    return { ok: true, command: `plan ${subcommand}`, timestamp: nowIso(), message: "Plan tasks generated.", data };
+  }
+
+  if (subcommand === "publish-tasks-external") {
+    const [planId] = rest;
+    if (!planId) {
+      throw new Error("Usage: ward plan publish-tasks-external <plan-id-or-packet-id>");
+    }
+    const data = await apiRequest(`/api/plan/${encodeURIComponent(planId)}/publish-tasks-external`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    return { ok: true, command: "plan publish-tasks-external", timestamp: nowIso(), message: "External task publishing checked.", data };
+  }
+
+  throw new Error("Usage: ward plan list|start|clear|status|show|answer|approve|revise|abort|generate-tasks|publish-tasks-external");
+}
+
 async function commandHandoff(args: string[]): Promise<CliResult> {
   const [subcommand, sessionId] = args;
   if (subcommand !== "show" || !sessionId) {
@@ -832,6 +983,8 @@ async function dispatch(args: string[]): Promise<CliResult> {
       return commandBrief(rest);
     case "warm":
       return commandWarm(rest);
+    case "plan":
+      return commandPlan(rest);
     case "handoff":
       return commandHandoff(rest);
     case "session":

@@ -1,6 +1,6 @@
 # Task 006: Plan Mode and Code-Context Service
 
-- Status: `planned`
+- Status: `done`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `high`
@@ -14,13 +14,34 @@ so the full UI and flow are testable without real model spend. Add the
 Code-Context Service that assembles repo structure for Plan Mode and Brain
 calls per `001/warm-start.md`.
 
+## Implementation Notes
+
+- `packages/core/src/plan/index.ts` defines the Plan Packet, round output,
+  session, and repo snapshot schemas with Zod validation.
+- `packages/memory/src/plan.ts` implements the deterministic Plan Mode engine:
+  context, proposal, critique, convergence, and decision rounds with three
+  simulated participants.
+- Plan state is durable in SQLite (`plan_session`, `plan_packet`,
+  `plan_round_transcript`) and round transcripts are written to
+  `~/.ward/sessions/<plan_session_id>/rounds/`.
+- Approved packets render to
+  `memory/workspaces/<slug>/wiki/plans/<packet_id>.md` and commit as `[llm]`.
+- `generate-tasks` creates `task` and `task_contract` rows, links each task
+  with `plan_packet_id`, and writes hard-memory task docs under
+  `~/.ward/workspaces/<slug>/tasks/`.
+- `packages/memory/src/code-context.ts` snapshots linked repos with bounded
+  file trees, key files, recent commits, diff summary, and a lightweight
+  regex-based symbol map. Runtime startup refreshes snapshots and polls for
+  changed git heads every 2 seconds.
+- External PM publishing is intentionally a stub until MCP connections land in
+  Task 009.
+
 ## In Scope
 
 ### Plan Mode engine
 
 - Round state machine: `context → proposal → critique → convergence → decision`.
-- Participant orchestration: parallel requests per round, timeout handling,
-  partial-participant fallback.
+- Deterministic simulated participant orchestration for this phase.
 - Moderator workflow: synthesis between rounds, clarifying-question routing
   to user.
 - Strict JSON schema validation per round (Zod).
@@ -38,12 +59,11 @@ calls per `001/warm-start.md`.
   Risks.
 - **Convergence policy** per workspace: `consensus` (default),
   `coordinator_decides` (ARIA-style), `user_decides`. See
-  [`001/plan-packet-schema.md`](001/plan-packet-schema.md). Policy is a
-  workspace preference; UI surfaces it in Settings → Workspace.
-- **Publish to PM tool** (optional, per workspace): on `generate-tasks`,
-  if the workspace has `publish_tasks_to: <pm_tool_id>` set, WARD calls
-  the PM tool's MCP create-issue tool and records each returned URL in
-  `task.external_ref_json`. Idempotent by task title + plan_packet_id.
+  [`001/plan-packet-schema.md`](001/plan-packet-schema.md). Task 006 exposes
+  policy selection at plan start; workspace-level defaults can follow after
+  the settings surface grows.
+- **Publish to PM tool** endpoint exists but returns a clear not-configured
+  result until MCP connections land in Task 009.
 
 ### Simulated participants
 
@@ -60,21 +80,20 @@ calls per `001/warm-start.md`.
 - Cached artifact `repo_snapshot:<repo_id>`:
   - file tree (bounded)
   - key files list (from manifest detection)
-  - light symbol map via `tree-sitter`
+  - light symbol map via regex extraction
   - last 10 commits oneline + stat
   - branch + diff vs default branch summary
-- Filesystem watcher: `chokidar` or native fs events.
-- Git watcher: polling every 60 s plus triggered on `git.*` events.
+- Git watcher: runtime polling every 2 s plus manual
+  `ward workspace refresh`.
 - Refresh on branch change, commit, or manual `ward workspace refresh`.
 - Used by Plan Mode (Context round) and by Orchestrator Brain when code
   context is needed for conversational mode in a workspace.
 
 ### API
 
-- `POST /api/plan/:workspace_id/start` — opens plan session, selects
-  participants from Brain Registry
+- `POST /api/plan/:workspace_id_or_slug/start` — opens plan session with
+  simulated participants
 - `GET /api/plan/:plan_id` — current state + round transcripts
-- `POST /api/plan/:plan_id/advance` — moderator proceeds to next round
 - `POST /api/plan/:plan_id/answer` — user answers clarifying questions
 - `POST /api/plan/:plan_id/approve` — user approves packet
 - `POST /api/plan/:plan_id/revise` — user requests revision with notes
@@ -132,8 +151,32 @@ calls per `001/warm-start.md`.
 - Plan Mode engine + round handlers
 - Simulated participant adapter
 - Code-Context Service + watchers + snapshot cache
-- Migration `0006_plan_packets.sql`
+- Migration `0005_plan_packets.sql`
 - API + CLI + UI
+
+## Verification
+
+- `bun run typecheck`
+- `bun run build:ui`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json init`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json up`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json create-workspace "Task Six Smoke" --description "Plan mode smoke" --repo /Users/eleazarjunsan/Code/Personal/ward`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json attach task-six-smoke README.md`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json workspace refresh task-six-smoke`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json plan start task-six-smoke --prompt "Plan Task 006 smoke validation"`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json plan approve packet_2396233a8ac54f47`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json plan generate-tasks packet_2396233a8ac54f47`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json wiki history task-six-smoke plans/packet_2396233a8ac54f47.md`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json plan revise packet_2396233a8ac54f47 "Tighten scope before execution."`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json plan status packet_2396233a8ac54f47`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json plan start task-six-smoke --prompt "Clarify the planning tradeoff" --clarify`
+- `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json plan answer plan_f548fed7e55740b3 "Optimize safety first, then scope."`
+- Temp git repo watcher smoke: initial snapshot head
+  `7106ed001f23f40285a19f7e6976bd8674919f02`, new commit
+  `3401d8079e33852786bf5b3bd0e367cf40dcecbf`, watcher snapshot refreshed
+  to the new head after a 3 s wait.
+- Runtime restart verified with `ward down`, `ward up`, and
+  `ward plan status packet_2396233a8ac54f47`.
 
 ## Risks
 
