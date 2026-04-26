@@ -175,7 +175,7 @@ rather than a refactor.
 - Background job pulls task status from configured PM MCP (Linear /
   GitHub Issues / Jira / Notion) on the workspaces with
   `publish_tasks_to` set (006).
-- Reconciles `task.external_ref` to keep status in sync (closed in PM →
+- Reconciles `task.external_ref_json` to keep status in sync (closed in PM →
   closed in WARD; reopened externally → reopened in WARD).
 - Polls every 5 min by default; can switch to webhook-driven later as
   another `TriggerSource` impl.

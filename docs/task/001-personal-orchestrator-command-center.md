@@ -1,6 +1,7 @@
 # Task 001: WARD Tech Plan
 
-- Status: `in_progress`
+- Status: `done`
+- Frozen: `2026-04-26`
 - Type: `epic` (umbrella tech plan)
 - Version Impact: `major`
 - Priority: `high`
@@ -24,6 +25,9 @@ One developer runs it on their workstation. It unifies:
 - multi-model **Plan Mode** for structured planning
 - **agent harnesses** that wrap Codex and Claude Code for real execution
 - **wiki-first memory** plus SQLite operational state
+- **hard-memory task artifacts** (`TASKS.md`, `docs/task/*.md`, test
+  reports, evidence packets) so coding agents can hand off without relying
+  on hidden model context
 - **MCP-based connections** to GitHub, Slack, Vercel, Supabase, and others
 - **remote notifications and inbound messaging** when the developer is away
 - **learning** through outcomes, preferences, and playbooks
@@ -113,7 +117,7 @@ two used to be conflated and are now explicitly split.
 | **Communication** | remote channels, inbound listener, outbound composer, rate limiting, audit; **observers for external agents WARD didn't launch** (Claude Code / Codex / Aider / etc.) so the peer stays context-aware regardless of who started the session | `RemoteChannel`, `AgentObserver` |
 | **Scheduling** | unified trigger registry (cron, git, PR, CI, file, presence, inbound, webhook), playbook engine | `TriggerSource` |
 | **Learning** | outcome capture, inference engines, routing advisor, playbook miner — all shadow-then-confirm | `Inferrer` |
-| **Orchestration** | context packet assembly, mode selection, intent parsing, autonomy gates, Plan Mode engine, presence service — the conductor | `AutonomyPolicy` |
+| **Orchestration** | context packet assembly, mode selection, intent parsing, autonomy gates, Plan Mode engine, agent routing, presence service — the conductor | `AutonomyPolicy`, `AgentRegistry` |
 | **UI** | browser SPA (Vite) + CLI — consumers of the Runtime API | — |
 
 ### Cross-Cutting Concerns
@@ -147,6 +151,32 @@ A user asks "delegate project-y backfill to Claude":
 8. Everything flows through **Security** redaction before egress and **Observability** logs with a shared trace id.
 
 This is the recurring pattern: layers talk through contracts, Orchestration conducts, cross-cutting concerns apply uniformly.
+
+### Agentic Task Flow
+
+The default coding workflow is artifact-first:
+
+```txt
+User -> WARD -> Planning Agent (/task harness)
+     -> TASKS.md + docs/task/*.md
+     -> WARD approval checkpoint
+     -> Coding Agent (/implement)
+     -> Quality Gate Agent (/simplify)
+     -> QA Agent (/test, optionally Playwright MCP after 009)
+     -> QA Supervisor evidence critique
+     -> Documentation Agent (/document)
+     -> Reporting Agent (/ship)
+     -> User approval for PR / release / external communication
+```
+
+The Orchestrator Brain keeps only the compact task state and agent signals.
+Each harness can keep its own rich private context while running, but the
+handoff boundary is the hard-memory layer: task docs, evidence packets,
+events, diffs, screenshots, traces, and reports.
+
+The first approval checkpoint happens after `/task` creates or updates the
+task doc. WARD reports the proposed scope, acceptance criteria, file plan,
+risks, and autonomy level to the user before implementation begins.
 
 ### Process Model
 
@@ -202,7 +232,7 @@ Bun maturity vs Node (mitigated by `node:`-prefixed fallbacks where needed).
 
 ### UI
 
-- Vite + lean SPA (React or Svelte — deferred to 002 scaffolding task).
+- Vite + lean SPA (**React** selected for implementation).
 - No Next.js, no SSR framework.
 - Served by the Runtime as static files at `/` with API under `/api`.
 
@@ -223,7 +253,14 @@ all downstream tasks must honor:
   for every pluggable layer (`BrainAdapter`, `MemoryBackend`, `SearchBackend`,
   `CacheBackend`, `HarnessAdapter`, `ConnectorAdapter`, `RemoteChannel`,
   `TriggerSource`, `AttachmentIngestor`, `Inferrer`, `AutonomyPolicy`,
-  `RedactionRule`). Enforcement via CI dependency lint.
+  `AgentRegistry`, `RedactionRule`). Enforcement via CI dependency lint.
+- [`001/agent-contract.md`](001/agent-contract.md) — specialist agent
+  manifests, context packets, signals, task evidence packets, required
+  task-doc sections, and the QA Supervisor contract that critiques harness
+  test evidence.
+- [`001/task-workflow-model.md`](001/task-workflow-model.md) — task identity,
+  lifecycle states, transition graph, approval gates, evidence exit checks,
+  external sync rules, and React command-center expectations.
 - [`001/brain-registry.md`](001/brain-registry.md) — Brain Registry schema,
   auth modes (subscription / API / local), runtime kinds (CLI / SDK / local),
   capability tags, per-concern routing, cost accounting modes.
@@ -345,21 +382,34 @@ Task 001 is complete when:
 1. This document defines: product boundaries, architecture layers and
    cross-cutting concerns, tech stack decisions, storage model, transport
    model, and non-functional requirements.
-2. All ten appendix documents (`extension-seams`, `brain-registry`,
-   `orchestrator-modes`, `harness-contract`, `event-taxonomy`,
-   `plan-packet-schema`, `mcp-registry`, `security-model`, `quota`,
-   `warm-start`) exist and define their contracts.
+2. All twelve appendix documents (`extension-seams`, `agent-contract`,
+   `task-workflow-model`, `brain-registry`, `orchestrator-modes`,
+   `harness-contract`, `event-taxonomy`, `plan-packet-schema`,
+   `mcp-registry`, `security-model`, `quota`, `warm-start`) exist and
+   define their contracts.
 3. Sub-task docs for 002 through 012 exist with scope and acceptance criteria.
 4. `TASKS.md` reflects the new split.
 5. `README.md` is updated to remove all Next.js and Python-runtime language.
 6. No application code has been written in this task.
 
-## Review Checklist (before starting Task 002)
+## Architecture Freeze Checklist
 
-- [ ] User reviews this document and the eight appendices.
-- [ ] User reviews sub-task docs 002 through 012.
-- [ ] User confirms stack choice (Bun + TypeScript).
-- [ ] User confirms CLI-wrap-first worker harness strategy.
-- [ ] User confirms MCP three-scope model including `.mcp.json` reuse.
-- [ ] User confirms Slack Socket Mode as primary inbound channel.
-- [ ] Any contract disagreement is resolved before 002 begins.
+- [x] User reviewed and approved freezing this document and the twelve
+  appendices.
+- [x] User reviewed sub-task docs 002 through 012 at planning level.
+- [x] User confirmed stack choice (Bun + TypeScript).
+- [x] User confirmed UI framework choice (React) and related scaffolding defaults.
+- [x] User confirmed the hard-memory rule: WARD depends on task docs,
+  evidence packets, events, diffs, and reports, not hidden harness context.
+- [x] User confirmed the Task Workflow Model: lifecycle states, approval gates,
+  evidence-based exit checks, and external sync rules.
+- [x] User confirmed CLI-wrap-first worker harness strategy.
+- [x] User confirmed QA Supervisor runs after `/test` and can reject thin
+  evidence even when the test harness reports PASS.
+- [x] User confirmed MCP three-scope model including `.mcp.json` reuse.
+- [x] User confirmed Slack Socket Mode as primary inbound channel.
+- [x] User reviewed top 5 user journeys with unhappy paths at architecture
+  level, especially remote intervention and destructive-action approval.
+- [x] User confirmed task-level measurable exit checks are included in
+  sub-task docs where relevant.
+- [x] Known contract drift resolved before 002 begins.

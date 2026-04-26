@@ -22,6 +22,10 @@ events and artifacts.
 5. **Recoverable.** Harness sessions survive Runtime restarts where the
    underlying worker supports it (stdio can be reattached via saved
    metadata; PTY sessions have a reattach path).
+6. **Artifact-first handoff.** Harnesses may keep rich private LLM context
+   while running, but WARD advances phases only from durable artifacts:
+   task docs, test reports, evidence packets, events, diffs, and session
+   summaries.
 
 ## Harness Launch Contract
 
@@ -56,6 +60,7 @@ type TaskContract = {
   goal: string;                  // 1–3 sentences
   constraints: string[];         // bullet list, hard rules
   acceptance_criteria: string[]; // bullet list
+  source_docs: string[];         // TASKS.md, docs/task/*.md, plan packet, etc.
   reporting_format: "stream-json" | "markdown" | "structured";
   max_iterations?: number;       // optional hard cap
 };
@@ -68,6 +73,7 @@ type ContextPacket = {
   workspace_summary: string;     // from warm cache
   recent_sessions: string[];     // summaries
   relevant_wiki_refs: Array<{ page: string; excerpt: string }>;
+  durable_artifact_refs: Array<{ kind: string; path: string; excerpt?: string }>;
   active_blockers: string[];
   repo_snapshot_ref: string;     // path to cached snapshot
   preferences_excerpt: object;   // only prefs relevant to this run
@@ -77,6 +83,11 @@ type ContextPacket = {
 
 The Runtime assembles the packet from the warm cache. Assembly is
 event-driven, not on-demand — see `warm-start.md`.
+
+The packet intentionally carries references and short excerpts, not an
+unbounded transcript. If a worker needs WARD to remember a decision, claim,
+or QA result, it writes the corresponding artifact and emits
+`agent.artifact_written` or `fs.file_written`.
 
 ## Runtime Kinds
 
@@ -214,10 +225,43 @@ Every session writes to `~/.ward/sessions/<session_id>/`:
 - `events.ndjson` — full event stream
 - `pty.raw` (visible mode only) — full byte capture
 - `artifacts/` — worker-produced files (diffs, PR URLs, logs)
+- `agent-signal.json` — compact signal returned by the active agent wrapper
 - `summary.md` — written by Orchestrator Post-session mode
 
 Retention is a user preference (default: keep indefinitely, allow manual
 purge via `ward session prune`).
+
+## Hard-Memory Handoff
+
+WARD does not require access to a harness's hidden LLM context. The harness
+contract requires each phase to write a handoff artifact before the
+Orchestrator can route the next phase.
+
+For repos that use `workflow-skills`, WARD maps the existing skill artifacts:
+
+| Skill phase | Durable artifact WARD reads |
+|---|---|
+| `/task` | `TASKS.md` + `docs/task/*.md` |
+| `/implement` | git diff + task doc implementation notes |
+| `/simplify` | task doc implementation notes + quality-gate signal |
+| `/test` | `docs/testing/*.md`, screenshots/traces, Playwright reports |
+| `/document` | `docs/features/*.md`, `docs/guides/*.md`, `LEARNINGS.md` |
+| `/ship` | PR URL, PR body, changelog/release draft |
+
+WARD can launch these phases itself or observe them through
+`AgentObserver`. In both cases, the artifact is the source of truth.
+
+## QA Supervisor
+
+The `/test` harness executes browser or CI verification. The WARD QA
+Supervisor is a separate bounded agent that reviews the resulting evidence.
+It reads the task doc, acceptance criteria, test report, changed files,
+screenshots/traces, console/network errors, and implementation claims.
+
+It emits `agent.qa_reviewed` and updates the task evidence packet. A PASS
+from `/test` is not sufficient by itself; the QA Supervisor can return
+`needs_work` when evidence is too thin, when the test only proves that a
+page loaded, or when documentation / PR claims do not match the diff.
 
 ## Allowed Tools
 

@@ -24,19 +24,30 @@ Entities per 001 data-model section, refined:
     work_hours_end, quiet_hours_start, quiet_hours_end, persona_tone,
     tts_enabled, tts_voice, tts_rate, tts_pitch, presence_default
 - `workspace`
-  - id, name, slug, description, status, primary_repo_path, autonomy_level,
-    last_opened_at, created_at, updated_at
+  - id, name, slug, description, status, primary_repo_path,
+    autonomy_level (`strict` / `standard` / `lenient`), last_opened_at,
+    created_at, updated_at
 - `workspace_repo`
   - id, workspace_id, local_path, branch, is_primary, watch_enabled
 - `attachment`
   - id, workspace_id, name, source_path, storage_path, kind, bytes,
     created_at
 - `task`
-  - id, workspace_id, title, description, status, type, priority,
-    assignee_kind, plan_packet_id, created_at, updated_at
+  - id, workspace_id, title, description, status, lifecycle_phase, type,
+    priority, source, owner, autonomy_level (`strict` / `standard` /
+    `lenient`, default copied from workspace), task_doc_path,
+    evidence_packet_path, assignee_kind, plan_packet_id, parent_task_id,
+    external_ref_json, completed_at, created_at, updated_at
 - `task_contract`
   - id, task_id, goal, constraints_json, acceptance_criteria_json,
-    reporting_format, max_iterations, created_at
+    file_plan_json, reporting_format, max_iterations, created_at
+- `task_gate`
+  - id, task_id, gate_type, reason, requested_by, status, created_at,
+    resolved_at, resolution_note
+- `task_dependency`
+  - task_id, blocked_by_task_id, created_at
+- `task_artifact`
+  - id, task_id, artifact_kind, path, url, checksum, redacted, created_at
 - `session`
   - id (uuid), workspace_id, task_id, brain_id, runtime_kind, mode,
     lifecycle_state, summary, started_at, ended_at
@@ -77,17 +88,35 @@ Ship three default impls (`MarkdownIngestor`, `PlainTextIngestor`,
 audio transcribe, email-thread) add one file without touching the
 attachment API.
 
-### Task.external_ref for PM tool integration
+### Task `external_ref_json` for PM tool integration
 
 - Add `external_ref_json` column to `task` table: optional JSON
-  `{ provider, external_id, url }` pointing at a PM tool's native task
-  (Linear issue, GitHub issue, Jira ticket, Notion row).
+  `{ provider, external_id, url, sync_direction, last_synced_at }` pointing
+  at a PM tool's native task (Linear issue, GitHub issue, Jira ticket,
+  Notion row).
 - When set, the UI and CLI show the PM link and sync status.
 - Actual PM MCP integration lands in 009; this task only provisions the
   column and repository methods.
 - Supports the **hybrid source-of-truth** pattern: WARD owns ephemeral
   session tasks; PM tool owns roadmap. Generated tasks from Plan Mode
-  (006) can publish outward via MCP and record the `external_ref`.
+  (006) can publish outward via MCP and record `external_ref_json`.
+
+### Task workflow MVP
+
+Task 003 implements the persistence and API surface from
+[`001/task-workflow-model.md`](001/task-workflow-model.md). This is not an
+agent runner yet; it is the domain service that later harnesses and Plan Mode
+must use.
+
+- create and list task rows with lifecycle status, phase, priority, owner,
+  autonomy level, task doc path, evidence packet path, and external refs
+- validate lifecycle transitions through the canonical transition graph
+- emit `task.*` events for create, update, legal transition, rejected
+  transition, gate open/resolve, artifact attach, and external sync
+- create, resolve, and retain approval gates
+- store task contracts, dependencies, and artifact references
+- keep large evidence payloads in files; SQLite stores only references and
+  checksums
 
 ### API endpoints
 
@@ -96,6 +125,17 @@ attachment API.
 - `GET /api/workspaces/:id` — detail
 - `PATCH /api/workspaces/:id` — update (autonomy, description, status)
 - `POST /api/workspaces/:id/attachments` — upload
+- `GET /api/tasks` — list/filter
+- `POST /api/tasks` — create task and optional contract
+- `GET /api/tasks/:id` — detail
+- `PATCH /api/tasks/:id` — update metadata and contract refs
+- `POST /api/tasks/:id/transition` — validated lifecycle transition
+- `POST /api/tasks/:id/gates` — open an approval gate
+- `POST /api/tasks/:id/approve` — resolve an approval gate positively
+- `POST /api/tasks/:id/reject` — reject an approval gate or task approval
+- `POST /api/tasks/:id/artifacts` — attach artifact or evidence reference
+- `GET /api/tasks/:id/events` — lifecycle and agent events
+- `GET /api/tasks/:id/evidence` — artifact and evidence references
 - `GET /api/profile` — read
 - `PATCH /api/profile` — update
 - `GET /api/preferences` / `PATCH /api/preferences/:scope/:key`
@@ -105,6 +145,14 @@ attachment API.
 - `ward create-workspace <name> [--description ...] [--repo <path>]`
 - `ward workspaces` (list)
 - `ward workspace <slug>` (detail)
+- `ward tasks [--workspace <slug>]`
+- `ward task create <workspace-slug> <title> [--type ...] [--priority ...]`
+- `ward task <task-id>`
+- `ward task transition <task-id> <status> [--phase ...] [--reason ...]`
+- `ward task gate open <task-id> <gate-type> --reason <reason>`
+- `ward task approve <task-id> [--gate <gate-id>]`
+- `ward task reject <task-id> [--gate <gate-id>] [--reason ...]`
+- `ward task artifact add <task-id> <path> [--kind ...]`
 - `ward profile show` / `ward profile set <key> <value>`
 - `ward attach <workspace-slug> <path>`
 
@@ -112,7 +160,8 @@ attachment API.
 
 - Settings → Profile page (first-run setup)
 - Workspaces list
-- Workspace detail with attachment list
+- Workspace detail with attachment and task lists
+- Task detail with lifecycle phase, gates, contract, and evidence links
 
 ## Out of Scope
 
@@ -132,17 +181,27 @@ attachment API.
    extracted text in detail.
 5. Unsupported attachment types are rejected with clear error.
 6. Autonomy level defaults to `standard`, settable per workspace.
-7. All new tables pass migration idempotency check (run twice, no error).
-8. All endpoints require device-token auth; no request without it succeeds.
+7. Task create/list/detail APIs persist and return the task workflow fields
+   defined in `001/task-workflow-model.md`.
+8. Legal task transitions update the task and emit exactly one
+   `task.transitioned` event; illegal transitions are rejected and emit
+   `task.transition_rejected`.
+9. Approval gates can be opened and resolved, and open gates put the task in
+   `needs_user` unless the task is already `blocked`.
+10. Task artifacts and evidence references can be attached and listed without
+    storing large payloads in SQLite.
+11. All new tables pass migration idempotency check (run twice, no error).
+12. All endpoints require device-token auth; no request without it succeeds.
 
 ## Deliverables
 
 - Migration file `0002_workspace_state.sql`
 - Repository layer in `packages/memory` (workspace, task, session,
-  attachment, preference)
+  attachment, task contract, task gate, task artifact, preference)
 - API handlers and Zod schemas in `apps/runtime`
 - CLI subcommands above
-- UI Settings → Profile + workspace list + detail (minimal styling)
+- UI Settings → Profile + workspace list/detail + task list/detail (minimal
+  styling)
 
 ## Risks
 

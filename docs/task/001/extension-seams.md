@@ -27,6 +27,7 @@ not a seam (see "Integrations vs. Seams" at the bottom).
 | `AttachmentIngestor` | Persistence | how an attachment kind becomes extractable text | kind → ingestor registry |
 | `Inferrer` | Learning | domain-specific inference (preferences, routing, playbooks) | built-in list + registry |
 | `AutonomyPolicy` | Orchestration | custom autonomy rules beyond the default matrix | preference override |
+| `AgentRegistry` | Orchestration | discover bounded specialist agents and their contracts | built-in list + plugin registry |
 | `RedactionRule` | Security (cross-cut) | custom redaction patterns | preferences |
 
 ## Contracts
@@ -260,6 +261,31 @@ Default: rules-based matrix from `001/security-model.md` and
 `001/mcp-registry.md`. Custom policies can key on time of day, workspace
 tag, remote-vs-local caller, etc.
 
+### AgentRegistry
+
+`AgentRegistry` is the seam for adding new WARD agents without expanding the
+Orchestrator Brain's permanent prompt. Agents declare a manifest, accepted
+context packet, output schema, artifact reads/writes, and approval gates.
+The full schema lives in [`agent-contract.md`](agent-contract.md).
+
+```ts
+interface AgentRegistry {
+  list(): Promise<WardAgentManifest[]>;
+  get(id: string): Promise<WardAgentManifest | null>;
+  select(input: AgentSelectionInput): Promise<WardAgentManifest[]>;
+}
+
+interface AgentRunner {
+  run(manifest: WardAgentManifest, packet: AgentContextPacket): AsyncIterable<WardEvent>;
+}
+```
+
+Built-ins cover planning, coding, quality gate, QA, QA Supervisor,
+documentation, and reporting. Future scheduler, communication, automation,
+security, accessibility, or domain-specific review agents plug in here.
+WARD stores only the returned `AgentSignal` in live orchestration context;
+details remain in hard-memory artifacts.
+
 ### RedactionRule
 
 ```ts
@@ -296,7 +322,7 @@ A frequent confusion: **an integration is not a seam**. Examples:
 - Google Calendar, Outlook Calendar → **integrations** (consumers of
   `TriggerSource` + MCP)
 - Project management tools → **integrations** (consumers of MCP +
-  `task.external_ref`)
+  `task.external_ref_json`)
 - Email as a command carrier → **integration** (consumer of
   `RemoteChannel`)
 - Email as an attachment source → **integration** (consumer of

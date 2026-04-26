@@ -11,7 +11,9 @@
 Replace stub workers with real Claude Code and Codex CLI adapters using
 subscription auth (default). Add Agent SDK and raw API adapters as opt-in
 alternatives via Brain Registry. Wire the cost ledger with three accounting
-modes (subscription / api / local).
+modes (subscription / api / local). Connect real adapters to the
+Agent Contract scaffolding from 007 so workflow-skills phases produce
+compact signals and hard-memory artifacts.
 
 ## In Scope
 
@@ -27,6 +29,37 @@ modes (subscription / api / local).
   - `codex exec` headless mode, equivalent stream parsing
   - Visible PTY mode
   - Auth: subscription
+
+### Workflow-skills bridge
+
+- Map existing agentic workflow skills to WARD agents:
+  - `/task` → Planning Agent
+  - `/implement` → Coding Agent
+  - `/simplify` → Quality Gate Agent
+  - `/test` → QA Agent
+  - `/document` → Documentation Agent
+  - `/ship` → Reporting Agent
+  - `/release` → Release playbook input
+- Compile `AgentContextPacket` from `TASKS.md`, `docs/task/*.md`, git diff,
+  recent events, and relevant wiki pages.
+- Require each phase to return `AgentSignal` plus a durable artifact before
+  WARD advances.
+- Preserve compatibility with externally launched Claude Code / Codex
+  sessions observed through `AgentObserver`; WARD may consume their task
+  docs and evidence even when it did not launch the session.
+
+### QA Supervisor real runner
+
+- Back QA Supervisor with the configured routing brain, preferring local or
+  subscription brains when available to keep QA review inexpensive.
+- Compare `/test` evidence against acceptance criteria and implementation
+  claims.
+- Emit `agent.qa_reviewed` with `pass`, `needs_work`, or `blocked`.
+- Update the task evidence packet and `## Harness Critique` when evidence
+  is thin.
+- Browser automation through Playwright MCP is enabled once the MCP layer
+  lands in 009; before then, QA Supervisor reviews existing test artifacts
+  and script outputs.
 
 ### SDK adapter (opt-in)
 
@@ -137,6 +170,10 @@ modes (subscription / api / local).
 9. Vendor login probes detect missing or expired auth; `ward doctor`
    reports clearly.
 10. Stub worker from 007 still works (kept for tests).
+11. Workflow-skills bridge runs a simulated `/task -> /implement -> /test`
+    chain and produces one `AgentSignal` per phase.
+12. QA Supervisor rejects a `/test` PASS when no evidence maps to an
+    acceptance criterion, and routes back to Coding Agent or human review.
 
 ## Deliverables
 

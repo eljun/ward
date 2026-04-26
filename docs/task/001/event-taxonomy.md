@@ -19,7 +19,7 @@ type WardEvent = {
   timestamp: string;        // ISO8601 UTC
   workspace_id: number | null;
   session_id: string | null;
-  source: "runtime" | "harness" | "orchestrator" | "mcp" | "user" | "inbound" | "scheduler";
+  source: "runtime" | "harness" | "agent" | "orchestrator" | "mcp" | "user" | "inbound" | "scheduler";
   payload: unknown;         // typed per event_type
   version: 1;
 };
@@ -54,6 +54,30 @@ JSON. The `version` field allows future schema evolution.
 | `worker.status_update` | `ward.status` call or fallback marker | `{state, detail, progress_pct}` |
 | `worker.needs_permission` | gated tool call paused | `{tool_name, arguments, reason}` |
 | `worker.error` | worker reported an error | `{error, recoverable: bool}` |
+
+### Task Lifecycle
+
+| `event_type` | When | Payload |
+|---|---|---|
+| `task.created` | task row and optional doc created | `{task_id, source, title}` |
+| `task.updated` | metadata or contract changed | `{task_id, changed_fields[]}` |
+| `task.transitioned` | legal lifecycle transition | `{task_id, from_status, to_status, from_phase, to_phase, reason}` |
+| `task.transition_rejected` | illegal transition attempted | `{task_id, from_status, requested_status, reason}` |
+| `task.gate_opened` | approval gate created | `{task_id, gate_id, gate_type, reason}` |
+| `task.gate_resolved` | approval gate approved/rejected | `{task_id, gate_id, decision}` |
+| `task.evidence_attached` | evidence packet or artifact linked | `{task_id, artifact_ref, evidence_kind}` |
+| `task.external_synced` | PM/repo external ref synced | `{task_id, provider, external_id, direction}` |
+
+See `task-workflow-model.md` for status meanings, legal transitions, and approval gate rules.
+
+### Agent Coordination
+
+| `event_type` | When | Payload |
+|---|---|---|
+| `agent.invoked` | Orchestrator launches a bounded specialist agent | `{agent_id, phase, task_id?, backing_skill?}` |
+| `agent.signal` | agent returns its compact routing signal | `{agent_id, status, summary, artifacts[], risks[], next_recommended_agent?}` |
+| `agent.artifact_written` | agent writes or updates a durable handoff artifact | `{agent_id, artifact_ref, artifact_kind}` |
+| `agent.qa_reviewed` | QA Supervisor critiques the test evidence for a task | `{task_id, status, missing_evidence[], harness_critique[], confidence}` |
 
 ### File and Repo
 
@@ -135,9 +159,9 @@ JSON. The `version` field allows future schema evolution.
 | Consumer | Subscribes to |
 |---|---|
 | **SQLite persistence** | all events with `session_id` → `session_events`; all others → `system_events` |
-| **SSE to UI** | session, worker, plan, git, notify, brain, presence |
-| **Warm cache invalidator** | `git.*`, `session.completed`, `plan.decision`, `fs.file_written`, `presence.changed` |
-| **Orchestrator mode selector** | `worker.needs_permission`, `session.blocked`, `session.completed`, `session.failed`, `plan.round_started`, `notify.queued`, `user.message`, `inbound.received` |
+| **SSE to UI** | task, session, worker, plan, git, notify, brain, presence |
+| **Warm cache invalidator** | `git.*`, `task.*`, `session.completed`, `plan.decision`, `agent.artifact_written`, `fs.file_written`, `presence.changed` |
+| **Orchestrator mode selector** | `worker.needs_permission`, `task.gate_opened`, `task.transitioned`, `agent.signal`, `agent.qa_reviewed`, `session.blocked`, `session.completed`, `session.failed`, `plan.round_started`, `notify.queued`, `user.message`, `inbound.received` |
 | **Cost ledger** | `brain.call_completed`, `brain.call_failed` |
 | **Audit log** | all events (full NDJSON dump) |
 

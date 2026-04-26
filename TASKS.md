@@ -48,11 +48,21 @@
 
 ## In Progress
 
-- [ ] `1` WARD Tech Plan (epic, planning-only)
+None
+
+## Testing
+
+- None
+
+## Done
+
+- [x] `1` WARD Tech Plan (epic, planning-only)
   - Doc: [docs/task/001-personal-orchestrator-command-center.md](docs/task/001-personal-orchestrator-command-center.md)
   - Goal: Lock architecture, contracts, schemas, and non-functional requirements that all sub-tasks (002–012) conform to. No code.
   - Appendices:
     - [Extension Seams](docs/task/001/extension-seams.md)
+    - [Agent Contract](docs/task/001/agent-contract.md)
+    - [Task Workflow Model](docs/task/001/task-workflow-model.md)
     - [Brain Registry](docs/task/001/brain-registry.md)
     - [Orchestrator Modes](docs/task/001/orchestrator-modes.md)
     - [Harness Contract](docs/task/001/harness-contract.md)
@@ -62,11 +72,3 @@
     - [Security Model](docs/task/001/security-model.md)
     - [Quota](docs/task/001/quota.md)
     - [Warm-Start](docs/task/001/warm-start.md)
-
-## Testing
-
-- None
-
-## Done
-
-- None

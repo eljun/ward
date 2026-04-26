@@ -11,8 +11,8 @@
 Implement the harness layer per `001/harness-contract.md` with a stubbed
 worker. Visible (PTY) and headless (piped stdio) modes share the same
 launch contract and emit the same event types. Includes the lifecycle state
-machine, worker status protocol, watchdog, artifact capture, and per-run
-tool allowlist enforcement.
+machine, worker status protocol, watchdog, artifact capture, hard-memory
+handoff, agent signal capture, and per-run tool allowlist enforcement.
 
 This task does not wire real Codex / Claude Code yet — that lands in 008.
 The stubbed worker emits canned stream-json events so the full pipeline can
@@ -36,6 +36,7 @@ be exercised end-to-end.
   - `events.ndjson`
   - `pty.raw` (visible only)
   - `artifacts/`
+  - `agent-signal.json`
 
 ### Lifecycle state machine
 
@@ -68,12 +69,48 @@ be exercised end-to-end.
 - This task ships the filter API and rejects out-of-allowlist calls with a
   synthetic `tool_not_allowed` result.
 
+### Agent contract scaffolding
+
+- Load built-in agent manifests from
+  [`001/agent-contract.md`](001/agent-contract.md):
+  Planning, Coding, Quality Gate, QA, QA Supervisor, Documentation, and
+  Reporting.
+- Persist each launch's `AgentContextPacket` and final `AgentSignal`.
+- Emit `agent.invoked`, `agent.signal`, and `agent.artifact_written`
+  events.
+- Do not implement real specialist intelligence yet; simulated agents
+  return deterministic signals for acceptance tests. Real Claude/Codex and
+  workflow-skills-backed runs land in 008.
+
+### Hard-memory handoff
+
+- Task docs, testing docs, evidence packets, events, and git diff summaries
+  are treated as the durable source of truth between phases.
+- Add parser helpers for stable task-doc sections:
+  - `## WARD Metadata`
+  - `## Agent Signals`
+  - `## Implementation Claims`
+  - `## QA Evidence`
+  - `## Harness Critique`
+  - `## Open Risks`
+- Create or update the task evidence packet when a simulated agent writes a
+  handoff artifact.
+
 ### Stub worker
 
 - Bun-based fake worker that emits scripted stream-json events from a YAML
   scenario file: state transitions, fake tool calls, fake messages, fake
   completion or failure.
 - Used for end-to-end tests and for UI demo without external deps.
+
+### QA Supervisor stub
+
+- Reads a canned task doc, fake `/test` report, and fake changed-file list.
+- Produces a deterministic `agent.qa_reviewed` event.
+- Marks evidence `needs_work` when a required acceptance criterion has no
+  matching test evidence, even if the fake `/test` report says PASS.
+- Writes the critique to the evidence packet and, when a repo task doc is
+  present, to `## Harness Critique`.
 
 ### Harness extension seam
 
@@ -178,18 +215,23 @@ Codex, SDK, API) land in 008 by implementing the same interface.
 7. Global concurrency cap honored across workspaces.
 8. Full event stream for a stub session matches the canonical event
    taxonomy.
-9. Incognito session: no wiki update, not in default list, not in search,
+9. `agent.invoked`, `agent.signal`, and `agent.artifact_written` events
+   persist for a simulated agent run.
+10. QA Supervisor stub rejects a PASS test report that lacks evidence for
+    one acceptance criterion; `agent.qa_reviewed` records the missing item.
+11. Incognito session: no wiki update, not in default list, not in search,
    not in learning inputs.
-10. `ward session revert` on a stub session with fake file writes
+12. `ward session revert` on a stub session with fake file writes
     restores the tree; emits `session.reverted`.
-11. Queued session survives daemon restart and dequeues on next start.
-12. Backpressure: high-throughput stub emits 10k events/s; UI client
+13. Queued session survives daemon restart and dequeues on next start.
+14. Backpressure: high-throughput stub emits 10k events/s; UI client
     receives coalesced stream at or below its configured cap, no data
     loss on the persistence path.
 
 ## Deliverables
 
 - Harness package in `packages/harness`
+- Agent contract scaffolding in `packages/orchestration`
 - Stub worker binary
 - Scenario YAML schema + sample scenarios
 - Migration `0007_session_lifecycle.sql` (lifecycle_state enum on session,

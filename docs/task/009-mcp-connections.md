@@ -72,6 +72,20 @@ and WARD-as-MCP-server (read-only).
 - Trigger Intervention mode for write/destructive denials in interactive
   flows
 
+### Agent capability MCP profiles
+
+- Define capability profiles that agents can request without knowing server
+  implementation details:
+  - `browser_qa` → Playwright MCP or equivalent browser automation server
+  - `repo_hosting` → GitHub / GitLab MCP
+  - `deployment` → Vercel MCP
+  - `database` → Supabase / Postgres MCP
+- `allowed_tools[]` on `HarnessLaunch` is derived from the agent manifest,
+  capability profile, autonomy policy, and workspace preferences.
+- QA Agent can request `browser_qa`; WARD grants only the browser tools
+  needed for the accepted test plan and records screenshots/traces as
+  evidence artifacts.
+
 ### MCP overlay handoff
 
 - On harness launch: write merged global + workspace overlay to
@@ -154,7 +168,10 @@ and WARD-as-MCP-server (read-only).
 7. WARD-as-MCP-server responds to `tools/list` and to `ward.list_workspaces`
    from an external MCP client.
 8. `ward mcp doctor` passes for all configured servers.
-9. Logs and event payloads are redacted: no raw secrets ever appear.
+9. A configured Playwright MCP server is classified under `browser_qa`; QA
+   Agent receives an allowlisted browser tool subset and writes screenshots
+   / traces to the evidence packet.
+10. Logs and event payloads are redacted: no raw secrets ever appear.
 
 ## Deliverables
 

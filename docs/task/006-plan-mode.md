@@ -32,6 +32,10 @@ calls per `001/warm-start.md`.
   packet_id.
 - Task generation from approved packets (creates `task` + `task_contract`
   rows, links to plan via `plan_packet_id`).
+- Generated task docs include the stable hard-memory sections from
+  [`001/agent-contract.md`](001/agent-contract.md): WARD Metadata, Agent
+  Signals, Implementation Claims, QA Evidence, Harness Critique, and Open
+  Risks.
 - **Convergence policy** per workspace: `consensus` (default),
   `coordinator_decides` (ARIA-style), `user_decides`. See
   [`001/plan-packet-schema.md`](001/plan-packet-schema.md). Policy is a
@@ -39,7 +43,7 @@ calls per `001/warm-start.md`.
 - **Publish to PM tool** (optional, per workspace): on `generate-tasks`,
   if the workspace has `publish_tasks_to: <pm_tool_id>` set, WARD calls
   the PM tool's MCP create-issue tool and records each returned URL in
-  `task.external_ref`. Idempotent by task title + plan_packet_id.
+  `task.external_ref_json`. Idempotent by task title + plan_packet_id.
 
 ### Simulated participants
 
@@ -79,7 +83,7 @@ calls per `001/warm-start.md`.
   packet
 - `POST /api/plan/:plan_id/publish-tasks-external` — publish generated
   tasks to a configured PM tool (Linear / GitHub / Jira / Notion) via
-  MCP, record the returned URLs in `task.external_ref`. Opt-in per
+  MCP, record the returned URLs in `task.external_ref_json`. Opt-in per
   workspace.
 
 ### CLI
@@ -114,12 +118,13 @@ calls per `001/warm-start.md`.
    `wiki/plans/<packet_id>.md` with an `[llm]` git commit.
 4. `generate-tasks` creates `task` rows and `task_contract` rows for each
    packet task entry.
-5. Clarifying questions from a simulated participant route to the user and
+5. Generated task docs include the required WARD hard-memory sections.
+6. Clarifying questions from a simulated participant route to the user and
    the user's answer resumes the round.
-6. Revising an approved packet bumps `version` and leaves history readable.
-7. Code-Context Service refreshes snapshot within 2 s of a git commit in a
+7. Revising an approved packet bumps `version` and leaves history readable.
+8. Code-Context Service refreshes snapshot within 2 s of a git commit in a
    linked repo.
-8. Plan Mode session survives Runtime restart (state restored from events +
+9. Plan Mode session survives Runtime restart (state restored from events +
    session directory).
 
 ## Deliverables

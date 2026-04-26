@@ -9,18 +9,20 @@ remote messaging for when the developer is away.
 
 ## Status
 
-WARD is in **planning phase**. Application code has not been written yet.
-The repository currently contains the technical plan and per-phase task
-documents that downstream implementation tasks will follow.
+WARD's architecture is **frozen after Task 001**. Application code has not
+been written yet. The repository currently contains the frozen technical plan
+and per-phase task documents that downstream implementation tasks will follow.
+Next up: Task 002, the Bun + TypeScript runtime skeleton.
 
 ## Planning Artifacts
 
 - [TASKS.md](TASKS.md) — full task list with status
 - [docs/task/001-personal-orchestrator-command-center.md](docs/task/001-personal-orchestrator-command-center.md)
   — the canonical tech plan (epic, planning-only)
-- [Appendices under `docs/task/001/`](docs/task/001/) — Brain Registry,
-  Orchestrator Modes, Harness Contract, Event Taxonomy, Plan Packet
-  Schema, MCP Registry, Security Model, Warm-Start
+- [Appendices under `docs/task/001/`](docs/task/001/) — Extension Seams,
+  Agent Contract, Task Workflow Model, Brain Registry, Orchestrator Modes,
+  Harness Contract, Event Taxonomy, Plan Packet Schema, MCP Registry,
+  Security Model, Quota, Warm-Start
 - [Sub-task docs `docs/task/002-` through `012-`](docs/task/) — each
   implementation phase with its own scope and acceptance criteria
 
@@ -39,6 +41,8 @@ Slack, Vercel, Supabase, etc.) go through **MCP servers** with three
 configuration scopes: global, workspace, and repo (the repo scope reuses
 Claude Code's native `.mcp.json` format). Operational state lives in
 SQLite. Compiled memory lives in a git-backed `~/.ward/memory/` wiki.
+Task docs, test reports, evidence packets, and session events form WARD's
+hard-memory layer for coding agents.
 
 ## Tech Stack
 
@@ -46,7 +50,7 @@ SQLite. Compiled memory lives in a git-backed `~/.ward/memory/` wiki.
   server + bundler).
 - **Storage**: SQLite (`bun:sqlite`) for operational state; git-backed
   filesystem for wiki memory; OS keychain for secrets.
-- **UI**: Vite + lean SPA (no Next.js, no SSR framework). Served by the
+- **UI**: Vite + lean React SPA (no Next.js, no SSR framework). Served by the
   Runtime.
 - **Workers**: Claude Code CLI and Codex CLI by default (subscription
   auth); SDK / API / local LLM as alternatives via Brain Registry.
@@ -71,12 +75,13 @@ SQLite. Compiled memory lives in a git-backed `~/.ward/memory/` wiki.
 | 011 | Learning loop |
 | 012 | Hardening |
 
-## Review Checklist (before implementation begins)
+## Architecture Freeze
 
-- [ ] Review [001 tech plan](docs/task/001-personal-orchestrator-command-center.md)
-- [ ] Review the eight appendices under [docs/task/001/](docs/task/001/)
-- [ ] Review sub-task docs 002 through 012
-- [ ] Confirm any contract changes before Task 002 begins
+- [x] [001 tech plan](docs/task/001-personal-orchestrator-command-center.md)
+  frozen on 2026-04-26
+- [x] Twelve appendices under [docs/task/001/](docs/task/001/) included
+- [x] Sub-task docs 002 through 012 scoped
+- [x] Contract drift resolved before Task 002
 
 ## License
 
