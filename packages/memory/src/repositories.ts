@@ -48,6 +48,7 @@ import type { Database } from "bun:sqlite";
 import { ensureWardLayout, resolveWardPaths, type WardPaths } from "./layout.ts";
 import { openWardDatabase } from "./migrations.ts";
 import { ensureMemoryBootstrap, ensureWorkspaceWiki } from "./wiki.ts";
+import { invalidateWarmCacheForEvent } from "./warm.ts";
 
 type WorkspaceRow = Omit<Workspace, "last_opened_at" | "primary_repo_path"> & {
   primary_repo_path: string | null;
@@ -333,6 +334,7 @@ export async function createWorkspace(input: CreateWorkspaceInput): Promise<Work
       source: "runtime",
       payload: { workspace_id: workspace.id, slug: workspace.slug, name: workspace.name }
     }));
+    invalidateWarmCacheForEvent("workspace.created", { workspace_id: workspace.id });
 
     return workspace;
   });
@@ -546,6 +548,7 @@ export function createTask(input: CreateTaskInput): WardTask {
     }
 
     taskEvent(db, "task.created", taskId, { source: parsed.source, title: parsed.title });
+    invalidateWarmCacheForEvent("task.created", { workspace_id: workspaceModel.id, task_id: taskId });
     return taskFromRow(db.query<TaskRow, [string]>("SELECT * FROM task WHERE id = ?").get(taskId)!);
   });
 }
@@ -588,6 +591,7 @@ export function transitionTask(taskId: string, input: TransitionTaskInput): Ward
       to_phase: nextPhase,
       reason: parsed.reason
     });
+    invalidateWarmCacheForEvent("task.transitioned", { workspace_id: task.workspace_id, task_id: taskId });
     return taskFromRow(db.query<TaskRow, [string]>("SELECT * FROM task WHERE id = ?").get(taskId)!);
   });
 }
@@ -606,6 +610,7 @@ export function openTaskGate(taskId: string, input: OpenGateInput): TaskGate {
       VALUES (?, ?, ?, ?, ?, 'open', ?, NULL, NULL)
     `).run(gateId, taskId, parsed.gate_type, parsed.reason, parsed.requested_by, timestamp);
     taskEvent(db, "task.gate_opened", taskId, { gate_id: gateId, gate_type: parsed.gate_type, reason: parsed.reason });
+    invalidateWarmCacheForEvent("task.gate_opened", { workspace_id: task.workspace_id, task_id: taskId });
 
     const current = taskFromRow(task);
     if (current.status !== "blocked" && current.status !== "needs_user" && !TERMINAL_STATUSES.has(current.status)) {

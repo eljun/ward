@@ -2,10 +2,6 @@
 
 ## Planned
 
-- [ ] `5` Warm-Start Pipeline, Overview, Handoff, and TTS
-  - Doc: [docs/task/005-warm-start-overview-handoff.md](docs/task/005-warm-start-overview-handoff.md)
-  - Goal: Precompute pipeline; daily brief (structured + narrated); Overview screen; end-of-session handoff writer; browser TTS.
-
 - [ ] `6` Plan Mode and Code-Context Service
   - Doc: [docs/task/006-plan-mode.md](docs/task/006-plan-mode.md)
   - Goal: 5-round Plan Mode with simulated participants; Plan Packet schema and persistence; Code-Context Service (repo snapshot, symbol map).
@@ -74,8 +70,29 @@ None
 - `ward wiki lint --scope task-four-smoke` returns no findings for seeded pages
 - runtime-served built UI root returns 200 and serves Vite assets
 - `bun run build`
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json init`
+- fresh Task 005 init creates schema version 4 and warm cache snapshots for `daily_brief:<date>` and `overview`
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json up`
+- daemon startup reports schema version 4 with warm cache prewarmed before health returns
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json brief`
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json doctor --warm-stats`
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json create-workspace "Task Five Smoke" --description "Warm start verification" --repo /Users/eleazarjunsan/Code/Personal/ward`
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json task create task-five-smoke "Verify warm handoff" --type feature --priority high`
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json session simulate task-five-smoke --task task_d27ef1a1bfa849b8 --summary "Task 005 simulated session completed warm brief and handoff verification." --changes "Added warm cache;Wrote overview brief;Verified handoff" --artifacts "sessions.md"`
+- simulated completion writes an `outcome_record`, appends `sessions.md`, and commits `[llm] handoff: <session-id>`
+- `ward handoff show <session-id>` returns the same outcome and wiki commit
+- `ward brief` reflects one completed session after handoff refresh
+- `ward warm` and `ward warm stats` verified; steady-state miss rate stayed at 0 in smoke reads
+- direct `GET /api/overview` returns brief counts and recent handoffs
+- runtime-served built UI root returns 200 and serves Vite assets with Overview controls
+- Overview TTS controls support browser voice selection plus persisted rate and pitch; macOS speech prefers `Joelle (Enhanced)` when available
+- `bun run build`
 
 ## Done
+
+- [x] `5` Warm-Start Pipeline, Overview, Handoff, and TTS
+  - Doc: [docs/task/005-warm-start-overview-handoff.md](docs/task/005-warm-start-overview-handoff.md)
+  - Goal: Precompute pipeline; daily brief (structured + narrated); Overview screen; end-of-session handoff writer; browser TTS.
 
 - [x] `4` Git-Backed Wiki Memory
   - Doc: [docs/task/004-wiki-memory.md](docs/task/004-wiki-memory.md)

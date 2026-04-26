@@ -4,9 +4,14 @@ import "./styles.css";
 
 type Profile = {
   display_name: string;
+  honorific: string | null;
   timezone: string;
   persona_tone: string;
   presence_default: string;
+  tts_enabled: boolean;
+  tts_voice: string | null;
+  tts_rate: number;
+  tts_pitch: number;
 };
 
 type Workspace = {
@@ -72,6 +77,61 @@ type SearchHit = {
   snippet: string;
 };
 
+type BriefWorkspace = {
+  id: number;
+  name: string;
+  slug: string;
+  status: string;
+  open_tasks: number;
+  blockers: number;
+};
+
+type BriefTaskSignal = {
+  workspace_slug: string;
+  workspace_name: string;
+  task_id: string;
+  title: string;
+  status: string;
+  reason: string;
+};
+
+type OutcomeRecord = {
+  id: string;
+  session_id: string;
+  status: "completed" | "failed";
+  outcome_summary: string;
+  handoff: string;
+  created_at: string;
+};
+
+type Overview = {
+  generated_at: string;
+  profile: Pick<Profile, "display_name" | "honorific" | "timezone" | "tts_enabled" | "tts_voice" | "tts_rate" | "tts_pitch">;
+  brief: {
+    greeting: string;
+    narration: string;
+    local_date: string;
+    speak: boolean;
+    counts: {
+      active_workspaces: number;
+      open_tasks: number;
+      blockers: number;
+      sessions_completed: number;
+      sessions_failed: number;
+    };
+    next_actions: Array<{ workspace_slug: string | null; task_id: string | null; title: string; action: string }>;
+  };
+  active_workspaces: BriefWorkspace[];
+  running_sessions: Array<{ id: string; lifecycle_state: string | null; summary: string | null }>;
+  recent_handoffs: OutcomeRecord[];
+  blockers: BriefTaskSignal[];
+  cache: {
+    entries: Array<{ key: string; stale: boolean; refreshed_at: string }>;
+    hit_rate: number;
+    miss_rate: number;
+  };
+};
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -101,12 +161,48 @@ function scopePath(scope: string): string {
   return `workspace/${encodeURIComponent(scope)}`;
 }
 
+function preferredVoice(name?: string | null): SpeechSynthesisVoice | null {
+  if (!("speechSynthesis" in window)) {
+    return null;
+  }
+  const voices = window.speechSynthesis.getVoices();
+  if (name) {
+    const selected = voices.find((voice) => voice.name === name);
+    if (selected) {
+      return selected;
+    }
+  }
+  return voices.find((voice) => voice.name === "Joelle (Enhanced)")
+    ?? voices.find((voice) => /^Joelle\b/i.test(voice.name))
+    ?? voices.find((voice) => /^(Samantha|Ava|Allison|Susan|Karen|Moira|Daniel|Alex)\b/i.test(voice.name))
+    ?? voices.find((voice) => voice.lang.toLowerCase().startsWith("en"))
+    ?? voices[0]
+    ?? null;
+}
+
+function speak(text: string, profile: Overview["profile"] | null) {
+  if (!("speechSynthesis" in window)) {
+    return;
+  }
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = profile?.tts_rate ?? 1;
+  utterance.pitch = profile?.tts_pitch ?? 1;
+  const voice = preferredVoice(profile?.tts_voice);
+  if (voice) {
+    utterance.voice = voice;
+  }
+  window.speechSynthesis.speak(utterance);
+}
+
 function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [selectedSlug, setSelectedSlug] = useState<string>("");
   const [detail, setDetail] = useState<WorkspaceDetail | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [memoryScope, setMemoryScope] = useState("universal");
@@ -127,9 +223,11 @@ function App() {
     const profileResponse = await api<{ profile: Profile }>("/api/profile");
     const workspaceResponse = await api<{ workspaces: Workspace[] }>("/api/workspaces");
     const taskResponse = await api<{ tasks: Task[] }>("/api/tasks");
+    const overviewResponse = await api<{ overview: Overview }>("/api/overview");
     setProfile(profileResponse.profile);
     setWorkspaces(workspaceResponse.workspaces);
     setTasks(taskResponse.tasks);
+    setOverview(overviewResponse.overview);
     if (!selectedSlug && workspaceResponse.workspaces[0]) {
       setSelectedSlug(workspaceResponse.workspaces[0].slug);
     }
@@ -172,6 +270,16 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!("speechSynthesis" in window)) {
+      return;
+    }
+    const loadVoices = () => setVoices(window.speechSynthesis.getVoices());
+    loadVoices();
+    window.speechSynthesis.addEventListener("voiceschanged", loadVoices);
+    return () => window.speechSynthesis.removeEventListener("voiceschanged", loadVoices);
+  }, []);
+
+  useEffect(() => {
     refreshDetail(selectedSlug).catch((err) => setError(err.message));
   }, [selectedSlug]);
 
@@ -188,10 +296,26 @@ function App() {
         display_name: String(form.get("display_name") ?? ""),
         timezone: String(form.get("timezone") ?? "UTC"),
         persona_tone: String(form.get("persona_tone") ?? "casual"),
-        presence_default: String(form.get("presence_default") ?? "present")
+        presence_default: String(form.get("presence_default") ?? "present"),
+        tts_enabled: form.get("tts_enabled") === "on",
+        tts_voice: String(form.get("tts_voice") ?? "") || null,
+        tts_rate: Number(form.get("tts_rate") ?? 1),
+        tts_pitch: Number(form.get("tts_pitch") ?? 1)
       })
     });
     setProfile(response.profile);
+    setOverview((current) => current ? {
+      ...current,
+      profile: {
+        ...current.profile,
+        tts_enabled: response.profile.tts_enabled,
+        tts_voice: response.profile.tts_voice,
+        tts_rate: response.profile.tts_rate,
+        tts_pitch: response.profile.tts_pitch,
+        display_name: response.profile.display_name,
+        timezone: response.profile.timezone
+      }
+    } : current);
     setMessage("Profile saved.");
   }
 
@@ -273,6 +397,13 @@ function App() {
     setSearchHits(response.hits);
   }
 
+  async function warmNow() {
+    await api("/api/warm", { method: "POST", body: JSON.stringify({}) });
+    const response = await api<{ overview: Overview }>("/api/overview");
+    setOverview(response.overview);
+    setMessage("Warm cache refreshed.");
+  }
+
   return (
     <main className="shell">
       <header className="topbar">
@@ -288,8 +419,77 @@ function App() {
       {error && <p className="banner error">{error}</p>}
       {message && <p className="banner">{message}</p>}
 
+      <section className="overview-grid">
+        <section className="panel brief-panel">
+          <div className="panel-title">
+            <h2>{overview?.brief.greeting ?? "Overview"}</h2>
+            <span>{overview?.brief.local_date ?? "warming"}</span>
+          </div>
+          <p className="brief-copy">{overview?.brief.narration ?? "WARD is preparing your brief."}</p>
+          <div className="metrics">
+            <div>
+              <strong>{overview?.brief.counts.active_workspaces ?? 0}</strong>
+              <span>workspaces</span>
+            </div>
+            <div>
+              <strong>{overview?.brief.counts.open_tasks ?? 0}</strong>
+              <span>open tasks</span>
+            </div>
+            <div>
+              <strong>{overview?.brief.counts.blockers ?? 0}</strong>
+              <span>blockers</span>
+            </div>
+            <div>
+              <strong>{overview?.recent_handoffs.length ?? 0}</strong>
+              <span>handoffs</span>
+            </div>
+          </div>
+          <div className="actions">
+            <button type="button" disabled={!overview} onClick={() => overview && speak(overview.brief.narration, overview.profile)}>
+              Speak
+            </button>
+            <button type="button" disabled={!overview} onClick={() => overview && speak("WARD notification test.", overview.profile)}>
+              Test
+            </button>
+            <button type="button" onClick={() => warmNow().catch((err) => setError(err.message))}>
+              Warm
+            </button>
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-title">
+            <h2>Next</h2>
+            <span>{overview?.brief.next_actions.length ?? 0}</span>
+          </div>
+          <div className="list compact">
+            {overview?.brief.next_actions.map((action) => (
+              <div className="item static" key={`${action.workspace_slug}-${action.task_id}-${action.title}`}>
+                <strong>{action.title}</strong>
+                <span>{action.workspace_slug ?? "global"} · {action.action}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-title">
+            <h2>Handoffs</h2>
+            <span>{overview?.cache.hit_rate ? `${Math.round(overview.cache.hit_rate * 100)}% hot` : "ready"}</span>
+          </div>
+          <div className="list compact">
+            {overview?.recent_handoffs.map((handoff) => (
+              <div className="item static" key={handoff.id}>
+                <strong>{handoff.status}</strong>
+                <span>{handoff.handoff}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </section>
+
       <section className="grid">
-        <form className="panel" onSubmit={saveProfile}>
+        <form className="panel" key={profile ? `${profile.display_name}-${profile.tts_voice ?? ""}-${voices.length}` : "profile-loading"} onSubmit={saveProfile}>
           <div className="panel-title">
             <h2>Profile</h2>
             <span>{profile?.display_name ? "ready" : "first run"}</span>
@@ -317,6 +517,31 @@ function App() {
                 <option value="away">Away</option>
                 <option value="dnd">DND</option>
               </select>
+            </label>
+          </div>
+          <label className="check-row">
+            <input name="tts_enabled" type="checkbox" defaultChecked={profile?.tts_enabled ?? false} />
+            TTS
+          </label>
+          <div className="tts-grid">
+            <label>
+              Voice
+              <select name="tts_voice" defaultValue={profile?.tts_voice ?? ""}>
+                <option value="">System best</option>
+                {voices.map((voice) => (
+                  <option key={`${voice.name}-${voice.lang}`} value={voice.name}>
+                    {voice.name} · {voice.lang}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Rate
+              <input name="tts_rate" type="number" min="0.6" max="1.4" step="0.05" defaultValue={profile?.tts_rate ?? 1} />
+            </label>
+            <label>
+              Pitch
+              <input name="tts_pitch" type="number" min="0.7" max="1.3" step="0.05" defaultValue={profile?.tts_pitch ?? 1} />
             </label>
           </div>
           <button type="submit">Save</button>

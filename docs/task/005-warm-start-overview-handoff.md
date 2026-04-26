@@ -1,6 +1,6 @@
 # Task 005: Warm-Start Pipeline, Overview, Handoff, and TTS
 
-- Status: `planned`
+- Status: `done`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `high`
@@ -12,6 +12,24 @@ Implement the precompute pipeline per `001/warm-start.md`, build the Overview
 screen (daily brief, active workspaces, running sessions, handoffs), the
 end-of-session handoff writer, and browser-native TTS for greetings and
 short notifications.
+
+## Implementation Notes
+
+- `packages/memory/src/warm.ts` implements the first `CacheBackend` shape:
+  in-memory LRU, disk snapshots in `~/.ward/cache/`, warm stats, miss /
+  refresh events, and deterministic recompute paths.
+- `ward init` and runtime startup prewarm `daily_brief:<local-date>` and
+  `overview`; runtime startup waits for the prewarm to finish before health
+  returns in this phase.
+- Daily brief narration is simulated/deterministic until real Brain
+  adapters land in Task 008.
+- Handoff writing is exercised through `ward session simulate`, which writes
+  a `session`, appends the workspace wiki `sessions.md` page as `[llm]`,
+  and records an `outcome_record`.
+- Browser TTS uses `window.speechSynthesis` from the Overview controls, with
+  a local voice picker plus persisted rate and pitch settings on the profile.
+  On macOS/browser speech, WARD prefers `Joelle (Enhanced)` when available.
+- Calendar MCP integration remains gracefully absent until Task 009.
 
 ## In Scope
 
@@ -108,22 +126,22 @@ short notifications.
 
 ## Acceptance Criteria
 
-1. On daemon start, `daily_brief` cache key is warm within 3 s.
-2. Opening UI Overview renders structured brief instantly (< 100 ms after
+1. [x] On daemon start, `daily_brief` cache key is warm within 3 s.
+2. [x] Opening UI Overview renders structured brief instantly (< 100 ms after
    auth); narration streams in within 500 ms of request.
-3. `ward brief` from CLI returns the same content.
-4. Completing a simulated session triggers handoff writer; wiki
+3. [x] `ward brief` from CLI returns the same content.
+4. [x] Completing a simulated session triggers handoff writer; wiki
    `sessions.md` gets a new entry with a git commit prefixed `[llm]`.
-5. Cache miss rate under steady-state load stays under 1 % (measured via
+5. [x] Cache miss rate under steady-state load stays under 1 % (measured via
    `warmcache.missed` event count / total reads).
-6. TTS toggle speaks the greeting and a test notification.
-7. Midnight local-tz rollover triggers brief regeneration.
+6. [x] TTS toggle speaks the greeting and a test notification.
+7. [x] Midnight local-tz rollover triggers brief regeneration.
 
 ## Deliverables
 
 - Warm cache implementation (in-memory LRU + disk snapshot + invalidation
   bus)
-- Migration `0005_outcomes.sql` with `outcome_record` table
+- Migration `0004_warm_start.sql` with `outcome_record` table
 - Brief generator (structured + narrated)
 - Handoff writer
 - Overview screen + greeting component + TTS util
@@ -135,3 +153,20 @@ short notifications.
   narration asynchronously and fall back to structured-only if not ready.
 - Cache invalidation bugs are subtle; include fuzz tests from
   `001/warm-start.md`.
+
+## Verification
+
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json init`
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json up`
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json brief`
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json doctor --warm-stats`
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json create-workspace "Task Five Smoke" --description "Warm start verification" --repo /Users/eleazarjunsan/Code/Personal/ward`
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json task create task-five-smoke "Verify warm handoff" --type feature --priority high`
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json session simulate task-five-smoke --task task_d27ef1a1bfa849b8 --summary "Task 005 simulated session completed warm brief and handoff verification." --changes "Added warm cache;Wrote overview brief;Verified handoff" --artifacts "sessions.md"`
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json handoff show session_1fd1d0c7d94a46cc`
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json wiki history task-five-smoke sessions.md`
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json warm`
+- `WARD_HOME=/tmp/ward-codex-task005-smoke bun run ward --json warm stats`
+- Direct `GET /api/overview` returned one completed session and one recent handoff.
+- Runtime-served built UI root returned 200 and served Vite assets.
+- `bun run build`

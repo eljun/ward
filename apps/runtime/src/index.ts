@@ -9,6 +9,7 @@ import {
   OpenGateSchema,
   ProfilePatchSchema,
   SearchQuerySchema,
+  SimulateSessionSchema,
   TransitionTaskSchema,
   UpdateWorkspaceSchema,
   WARD_VERSION,
@@ -23,6 +24,7 @@ import {
   addTaskArtifact,
   appendWikiPage,
   createTask,
+  createSimulatedSession,
   createWorkspace,
   createLogger,
   ensureDeviceToken,
@@ -34,6 +36,9 @@ import {
   getTask,
   getTaskEvents,
   getTaskEvidence,
+  getDailyBrief,
+  getHandoff,
+  getOverview,
   getWorkspaceByIdOrSlug,
   getWorkspaceDetail,
   ingestAttachmentBuffer,
@@ -46,6 +51,7 @@ import {
   listWorkspaces,
   openWardDatabase,
   openTaskGate,
+  prewarmWarmCache,
   readWikiPage,
   rebuildSearchIndex,
   readDeviceToken,
@@ -59,6 +65,7 @@ import {
   transitionTask,
   updateProfile,
   updateWorkspace,
+  warmCacheStats,
   wikiPageHistory,
   writeWikiPage,
   writePort
@@ -198,6 +205,30 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
     if (parts[0] === "preferences" && req.method === "PATCH" && parts[1] && parts[2]) {
       const body = await readJson(req) as { value?: unknown; workspace_id?: number };
       return json({ ok: true, preference: setPreference(parts[1] as "global" | "workspace" | "repo", parts[2], body.value, body.workspace_id) });
+    }
+
+    if (parts[0] === "overview" && req.method === "GET") {
+      return json({ ok: true, overview: await getOverview({ reason: "api.overview" }) });
+    }
+
+    if (parts[0] === "brief" && req.method === "GET" && (parts[1] === "today" || parts[1] === "yesterday")) {
+      return json({ ok: true, brief: await getDailyBrief(parts[1], { reason: `api.brief.${parts[1]}` }) });
+    }
+
+    if (parts[0] === "warm" && req.method === "POST" && !parts[1]) {
+      return json({ ok: true, stats: await prewarmWarmCache("api.warm") });
+    }
+
+    if (parts[0] === "warm" && req.method === "GET" && parts[1] === "stats") {
+      return json({ ok: true, stats: await warmCacheStats() });
+    }
+
+    if (parts[0] === "handoffs" && parts[1] && req.method === "GET") {
+      return json({ ok: true, handoff: await getHandoff(parts[1]) });
+    }
+
+    if (parts[0] === "sessions" && parts[1] === "simulate" && req.method === "POST") {
+      return json({ ok: true, ...await createSimulatedSession(SimulateSessionSchema.parse(await readJson(req))) }, 201);
     }
 
     if (parts[0] === "search" && req.method === "GET") {
@@ -391,6 +422,7 @@ export async function startRuntime(): Promise<void> {
   await runMigrations(paths, { repoRoot });
   await ensureMemoryBootstrap(paths);
   await rebuildSearchIndex(paths);
+  await prewarmWarmCache("runtime.startup");
 
   const lock = acquireInstanceLock(paths);
   const logger = await createLogger(paths);

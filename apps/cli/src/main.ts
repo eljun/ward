@@ -16,12 +16,14 @@ import {
   isPortAvailable,
   readDeviceToken,
   readRuntimeState,
+  prewarmWarmCache,
   rebuildSearchIndex,
   resolveRepoRoot,
   resolveWardPaths,
   rotateDeviceToken,
   runMigrations,
-  checkMemoryGit
+  checkMemoryGit,
+  warmCacheStats
 } from "@ward/memory";
 import { openWardDatabase } from "@ward/memory";
 
@@ -114,6 +116,14 @@ function stringFlag(flags: Record<string, string | boolean>, key: string): strin
   return typeof value === "string" ? value : undefined;
 }
 
+function listFlag(flags: Record<string, string | boolean>, key: string): string[] {
+  const value = stringFlag(flags, key);
+  if (!value) {
+    return [];
+  }
+  return value.split(";").map((item) => item.trim()).filter(Boolean);
+}
+
 async function ensureRuntime(): Promise<void> {
   if (await healthFetch()) {
     return;
@@ -153,6 +163,7 @@ async function commandInit(): Promise<CliResult> {
   const migrations = await runMigrations(paths, { repoRoot });
   await ensureMemoryBootstrap(paths);
   await rebuildSearchIndex(paths);
+  const warm = await prewarmWarmCache("cli.init");
   return {
     ok: true,
     command: "init",
@@ -163,7 +174,8 @@ async function commandInit(): Promise<CliResult> {
       db: paths.dbFile,
       memory: paths.memoryDir,
       schema_version: migrations.currentVersion,
-      migrations_applied: migrations.applied
+      migrations_applied: migrations.applied,
+      warm_cache: warm
     }
   };
 }
@@ -336,7 +348,8 @@ function ensureNodePtyHelperExecutable(): void {
   }
 }
 
-async function commandDoctor(): Promise<CliResult> {
+async function commandDoctor(args: string[] = []): Promise<CliResult> {
+  const parsed = parseFlags(args);
   const paths = resolveWardPaths();
   const checks: DoctorCheck[] = [];
 
@@ -423,12 +436,16 @@ async function commandDoctor(): Promise<CliResult> {
   }
 
   const failed = checks.some((check) => check.status === "fail");
+  const data: Record<string, unknown> = { checks };
+  if (parsed.flags["warm-stats"]) {
+    data.warm_cache = await warmCacheStats();
+  }
   return {
     ok: !failed,
     command: "doctor",
     timestamp: nowIso(),
     message: failed ? "WARD doctor found issues." : "WARD doctor passed.",
-    data: { checks }
+    data
   };
 }
 
@@ -725,6 +742,58 @@ async function commandSearch(args: string[]): Promise<CliResult> {
   return { ok: true, command: "search", timestamp: nowIso(), message: "WARD search.", data };
 }
 
+async function commandBrief(args: string[]): Promise<CliResult> {
+  const parsed = parseFlags(args);
+  const range = parsed.flags.yesterday ? "yesterday" : "today";
+  const data = await apiRequest(`/api/brief/${range}`);
+  return { ok: true, command: "brief", timestamp: nowIso(), message: `WARD ${range} brief.`, data };
+}
+
+async function commandWarm(args: string[]): Promise<CliResult> {
+  const [subcommand] = args;
+  if (subcommand === "stats") {
+    const data = await apiRequest("/api/warm/stats");
+    return { ok: true, command: "warm stats", timestamp: nowIso(), message: "WARD warm cache stats.", data };
+  }
+  const data = await apiRequest("/api/warm", { method: "POST", body: JSON.stringify({}) });
+  return { ok: true, command: "warm", timestamp: nowIso(), message: "WARD warm cache refreshed.", data };
+}
+
+async function commandHandoff(args: string[]): Promise<CliResult> {
+  const [subcommand, sessionId] = args;
+  if (subcommand !== "show" || !sessionId) {
+    throw new Error("Usage: ward handoff show <session-id>");
+  }
+  const data = await apiRequest(`/api/handoffs/${encodeURIComponent(sessionId)}`);
+  return { ok: true, command: "handoff show", timestamp: nowIso(), message: "WARD handoff.", data };
+}
+
+async function commandSession(args: string[]): Promise<CliResult> {
+  const [subcommand, ...rest] = args;
+  if (subcommand !== "simulate") {
+    throw new Error("Usage: ward session simulate <workspace-slug> [--status completed|failed] [--summary ...]");
+  }
+  const parsed = parseFlags(rest);
+  const [workspace] = parsed.positional;
+  if (!workspace) {
+    throw new Error("Usage: ward session simulate <workspace-slug> [--status completed|failed] [--summary ...]");
+  }
+  const data = await apiRequest("/api/sessions/simulate", {
+    method: "POST",
+    body: JSON.stringify({
+      workspace_slug: workspace,
+      task_id: stringFlag(parsed.flags, "task"),
+      status: stringFlag(parsed.flags, "status") ?? "completed",
+      summary: stringFlag(parsed.flags, "summary"),
+      key_changes: listFlag(parsed.flags, "changes"),
+      artifacts: listFlag(parsed.flags, "artifacts"),
+      blockers: listFlag(parsed.flags, "blockers"),
+      architecture_touched: Boolean(parsed.flags["architecture"])
+    })
+  });
+  return { ok: true, command: "session simulate", timestamp: nowIso(), message: "Simulated session completed.", data };
+}
+
 async function dispatch(args: string[]): Promise<CliResult> {
   const [command, ...rest] = args;
   switch (command) {
@@ -738,7 +807,7 @@ async function dispatch(args: string[]): Promise<CliResult> {
     case undefined:
       return commandStatus();
     case "doctor":
-      return commandDoctor();
+      return commandDoctor(rest);
     case "auth":
       return commandAuth(rest);
     case "profile":
@@ -759,6 +828,14 @@ async function dispatch(args: string[]): Promise<CliResult> {
       return commandWiki(rest);
     case "search":
       return commandSearch(rest);
+    case "brief":
+      return commandBrief(rest);
+    case "warm":
+      return commandWarm(rest);
+    case "handoff":
+      return commandHandoff(rest);
+    case "session":
+      return commandSession(rest);
     default:
       throw new Error(`Unknown command: ${command}`);
   }
