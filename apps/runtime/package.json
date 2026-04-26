@@ -1,0 +1,13 @@
+{
+  "name": "@ward/runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/index.ts"
+  },
+  "dependencies": {
+    "@ward/core": "workspace:*",
+    "@ward/memory": "workspace:*"
+  }
+}

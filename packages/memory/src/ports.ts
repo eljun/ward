@@ -1,0 +1,21 @@
+import { createServer } from "node:net";
+
+export async function isPortAvailable(port: number, host = "127.0.0.1"): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = createServer();
+    server.once("error", () => resolve(false));
+    server.once("listening", () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port, host);
+  });
+}
+
+export async function findAvailablePort(start = 47730, end = 47830, host = "127.0.0.1"): Promise<number> {
+  for (let port = start; port <= end; port += 1) {
+    if (await isPortAvailable(port, host)) {
+      return port;
+    }
+  }
+  throw new Error(`No available port in range ${start}-${end}`);
+}

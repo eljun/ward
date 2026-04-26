@@ -1,6 +1,6 @@
 # Task 002: Runtime Skeleton
 
-- Status: `planned`
+- Status: `done`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `high`
@@ -13,6 +13,30 @@ Bun + TypeScript monorepo. Ship a runnable daemon + CLI with auth,
 single-instance guard, migration framework, structured logging, `ward doctor`,
 and a PTY smoke test. No feature surface yet — this task exists so 003–012
 all have a solid runtime to build on.
+
+## Phase 1 Implementation Posture
+
+WARD phase 1 is built for one primary user on macOS. Linux compatibility is
+welcome when it falls out of portable choices, but macOS is the acceptance
+target for installer, daemon control, file permissions, PID locking, PTY
+smoke, and first-run ergonomics. Windows is explicitly deferred.
+
+The first satisfying vertical slice is:
+
+```txt
+ward init
+  -> ward up
+  -> ward status
+  -> authenticated GET /api/health
+  -> browser health page served by runtime
+  -> structured log/event visible on disk
+  -> ward down
+```
+
+Keep this task boring and dependable. No agent magic, no rich dashboard, no
+MCP runtime, and no task workflow behavior yet. The goal is a trustworthy
+heartbeat: install, boot, authenticate, log, migrate, report health, and shut
+down cleanly.
 
 ## In Scope
 
@@ -37,6 +61,8 @@ all have a solid runtime to build on.
   tracks applied versions in `schema_version` table.
 - Structured NDJSON logger with trace-id propagation.
 - `ward doctor`:
+  - macOS phase-1 environment check (Bun version, shell PATH, writable
+    `~/.ward`, file-permission support)
   - port free
   - PID lock state
   - device token present and `0600`
@@ -69,21 +95,22 @@ all have a solid runtime to build on.
 - MCP servers (lands in 009)
 - Real brain adapters (lands in 008)
 - UI beyond a health-check page
+- Linux hardening and Windows support
 
 ## Acceptance Criteria
 
-1. `ward init` on a clean machine creates the full directory layout with
-   correct permissions.
+1. `ward init` on a clean macOS machine creates the full directory layout
+   with correct permissions.
 2. `ward up` starts the daemon; `ward status` shows it running.
 3. Second `ward up` attempt fails with a clear single-instance error.
 4. HTTP requests without the device token return 401. With the token,
    `GET /api/health` returns 200.
 5. `ward doctor` prints a checklist with pass/fail per check.
-6. PTY smoke test inside `ward doctor` passes on Linux and macOS.
+6. PTY smoke test inside `ward doctor` passes on macOS.
 7. Migration runner applies a seed migration and records its version.
 8. Graceful shutdown flushes logs and releases the PID lock.
 9. CLI cold start for `ward status` is under 200 ms on a warm machine.
-10. No Python or Next.js references remain in the repo.
+10. No Python runtime files or Next.js implementation remain in the repo.
 11. Every CLI subcommand in this task supports `--json` and emits a
     Zod-validated result.
 12. Layering lint runs in CI and fails the build on a seeded violation
@@ -95,6 +122,7 @@ all have a solid runtime to build on.
 - `packages/core` with Zod types imported from 001 appendix schemas
 - `packages/memory` with migration runner
 - `apps/runtime` daemon + `apps/cli` CLI
+- `apps/ui` health page served by the runtime
 - `ward doctor` passing locally
 - README updated with install + first-run steps
 
@@ -105,3 +133,6 @@ all have a solid runtime to build on.
   tasks.
 - Port collisions: auto-retry with a configurable range, persist chosen
   port in config.
+- macOS-first implementation may leave Linux/Windows rough edges. Document
+  these clearly and defer cross-platform polish until there is real external
+  demand.

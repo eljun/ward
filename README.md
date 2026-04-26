@@ -9,10 +9,16 @@ remote messaging for when the developer is away.
 
 ## Status
 
-WARD's architecture is **frozen after Task 001**. Application code has not
-been written yet. The repository currently contains the frozen technical plan
-and per-phase task documents that downstream implementation tasks will follow.
-Next up: Task 002, the Bun + TypeScript runtime skeleton.
+WARD's architecture is **frozen after Task 001**. Task 002 is implemented:
+the repo now contains the Bun + TypeScript runtime skeleton, CLI, memory
+package, and Vite health shell.
+
+## Phase 1 Stance
+
+WARD starts as a macOS-first, local-first side project for one developer. The
+core comes before polish: install, daemon lifecycle, auth, migrations,
+structured logs, health status, and a small runtime-served UI. Linux and
+Windows hardening can follow if the project gains traction and collaborators.
 
 ## Planning Artifacts
 
@@ -25,6 +31,23 @@ Next up: Task 002, the Bun + TypeScript runtime skeleton.
   Security Model, Quota, Warm-Start
 - [Sub-task docs `docs/task/002-` through `012-`](docs/task/) — each
   implementation phase with its own scope and acceptance criteria
+
+## First Run
+
+```sh
+bun install
+bun run ward init
+bun run ward up
+bun run ward status
+bun run ward doctor
+bun run ward down
+```
+
+The CLI honors `WARD_HOME` for smoke tests or isolated local state:
+
+```sh
+WARD_HOME=/tmp/ward-smoke bun run ward init
+```
 
 ## Architecture (one paragraph)
 

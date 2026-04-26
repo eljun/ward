@@ -1,5 +1,5 @@
 # local dependencies and generated runtimes
-/node_modules
+node_modules/
 /venv
 /.venv
 __pycache__/
@@ -10,7 +10,9 @@ __pycache__/
 /.next/
 /build
 /dist
+dist/
 /out
+*.tsbuildinfo
 
 # local state
 .DS_Store
@@ -23,6 +25,7 @@ __pycache__/
 /.claude/
 
 # debug
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

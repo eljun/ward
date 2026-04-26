@@ -2,10 +2,6 @@
 
 ## Planned
 
-- [ ] `2` Runtime Skeleton
-  - Doc: [docs/task/002-runtime-skeleton.md](docs/task/002-runtime-skeleton.md)
-  - Goal: Bun + TypeScript monorepo, daemon + CLI, auth, single-instance, migrations, structured logging, `ward doctor`, PTY smoke.
-
 - [ ] `3` Workspace State, User Profile, and Attachments
   - Doc: [docs/task/003-workspace-state.md](docs/task/003-workspace-state.md)
   - Goal: SQLite schema for workspaces, tasks, sessions, events, preferences; user profile; attachment intake (markdown / text / PDF).
@@ -52,9 +48,23 @@ None
 
 ## Testing
 
-- None
+- `bun install --frozen-lockfile`
+- `bun run build`
+- `WARD_HOME=/tmp/ward-codex-smoke bun run ward --json init`
+- `WARD_HOME=/tmp/ward-codex-smoke bun run ward --json up`
+- unauthenticated `GET /api/health` returns 401
+- authenticated `GET /api/health` returns 200
+- runtime-served UI root returns 200 and contains WARD shell
+- second `ward up` fails with a clear single-instance error
+- `WARD_HOME=/tmp/ward-codex-smoke bun run ward --json doctor`
+- `WARD_HOME=/tmp/ward-codex-smoke bun run ward --json down`
+- `ward status` cold-start measurement: 35 ms in smoke home
 
 ## Done
+
+- [x] `2` Runtime Skeleton
+  - Doc: [docs/task/002-runtime-skeleton.md](docs/task/002-runtime-skeleton.md)
+  - Goal: macOS-first Bun + TypeScript monorepo, daemon + CLI, auth, single-instance, migrations, structured logging, health UI, `ward doctor`, PTY smoke.
 
 - [x] `1` WARD Tech Plan (epic, planning-only)
   - Doc: [docs/task/001-personal-orchestrator-command-center.md](docs/task/001-personal-orchestrator-command-center.md)

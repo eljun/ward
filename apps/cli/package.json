@@ -1,0 +1,14 @@
+{
+  "name": "@ward/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/main.ts"
+  },
+  "dependencies": {
+    "@ward/core": "workspace:*",
+    "@ward/memory": "workspace:*",
+    "node-pty": "^1.0.0"
+  }
+}

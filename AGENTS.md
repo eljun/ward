@@ -4,8 +4,7 @@ This repo is a **Bun + TypeScript** local-first orchestrator project. The
 runtime, CLI, and UI all run on Bun. SQLite via `bun:sqlite`. UI built with
 Vite — no Next.js, no SSR framework.
 
-The current Python files in `src/ward/` are a legacy baseline scheduled for
-removal in Task 002 (Runtime Skeleton). New work targets the Bun + TS
+The legacy Python baseline has been removed. New work targets the Bun + TS
 monorepo described in the planning docs.
 
 Keep the runtime local-first, single-user, and aligned with the planning
