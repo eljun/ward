@@ -9,9 +9,10 @@ remote messaging for when the developer is away.
 
 ## Status
 
-WARD's architecture is **frozen after Task 001**. Task 002 is implemented:
-the repo now contains the Bun + TypeScript runtime skeleton, CLI, memory
-package, and Vite health shell.
+WARD's architecture is **frozen after Task 001**. Tasks 002 and 003 are
+implemented: the repo contains the Bun + TypeScript runtime skeleton, CLI,
+memory package, Vite command-center shell, workspace/profile state, task
+workflow state, and attachment intake.
 
 ## Phase 1 Stance
 
@@ -47,6 +48,15 @@ The CLI honors `WARD_HOME` for smoke tests or isolated local state:
 
 ```sh
 WARD_HOME=/tmp/ward-smoke bun run ward init
+```
+
+After `ward up`, try the first state commands:
+
+```sh
+bun run ward profile set display_name Eleazar
+bun run ward create-workspace "WARD Sandbox" --description "Local smoke"
+bun run ward task create ward-sandbox "Verify workspace state" --priority high
+bun run ward attach ward-sandbox ./README.md
 ```
 
 ## Architecture (one paragraph)

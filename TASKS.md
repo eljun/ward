@@ -2,10 +2,6 @@
 
 ## Planned
 
-- [ ] `3` Workspace State, User Profile, and Attachments
-  - Doc: [docs/task/003-workspace-state.md](docs/task/003-workspace-state.md)
-  - Goal: SQLite schema for workspaces, tasks, sessions, events, preferences; user profile; attachment intake (markdown / text / PDF).
-
 - [ ] `4` Git-Backed Wiki Memory
   - Doc: [docs/task/004-wiki-memory.md](docs/task/004-wiki-memory.md)
   - Goal: Universal + per-workspace wikis backed by git; conventions; FTS5 search across wiki, sessions, plan packets; lint pass.
@@ -59,8 +55,21 @@ None
 - `WARD_HOME=/tmp/ward-codex-smoke bun run ward --json doctor`
 - `WARD_HOME=/tmp/ward-codex-smoke bun run ward --json down`
 - `ward status` cold-start measurement: 35 ms in smoke home
+- `WARD_HOME=/tmp/ward-codex-smoke bun run ward --json profile set display_name Eleazar`
+- `WARD_HOME=/tmp/ward-codex-smoke bun run ward --json create-workspace "Task Three Smoke" --description "Task 003 verification" --repo /Users/eleazarjunsan/Code/Personal/ward`
+- `WARD_HOME=/tmp/ward-codex-smoke bun run ward --json task create task-three-smoke "Verify task workflow" --type feature --priority high`
+- task transition `idea -> planned`, approval gate open/approve, and event API verified
+- markdown, text, and PDF attachment ingestion verified with extracted text files
+- unsupported attachment type rejects with clear error
+- task artifact attach verified with SHA-256 checksum
+- repeated `ward init` leaves schema at version 2 with no new migrations
+- `WARD_HOME=/tmp/ward-codex-smoke bun run ward --json doctor`
 
 ## Done
+
+- [x] `3` Workspace State, User Profile, and Attachments
+  - Doc: [docs/task/003-workspace-state.md](docs/task/003-workspace-state.md)
+  - Goal: SQLite schema for workspaces, tasks, sessions, events, preferences; user profile; attachment intake (markdown / text / PDF).
 
 - [x] `2` Runtime Skeleton
   - Doc: [docs/task/002-runtime-skeleton.md](docs/task/002-runtime-skeleton.md)

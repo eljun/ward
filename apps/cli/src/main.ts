@@ -26,6 +26,11 @@ type ParsedArgs = {
   args: string[];
 };
 
+type FlagParse = {
+  positional: string[];
+  flags: Record<string, string | boolean>;
+};
+
 const require = createRequire(import.meta.url);
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -77,6 +82,63 @@ async function healthFetch(): Promise<unknown | null> {
     return null;
   }
   return response.json();
+}
+
+function parseFlags(args: string[]): FlagParse {
+  const positional: string[] = [];
+  const flags: Record<string, string | boolean> = {};
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg.startsWith("--")) {
+      positional.push(arg);
+      continue;
+    }
+    const key = arg.slice(2);
+    const next = args[index + 1];
+    if (!next || next.startsWith("--")) {
+      flags[key] = true;
+    } else {
+      flags[key] = next;
+      index += 1;
+    }
+  }
+  return { positional, flags };
+}
+
+function stringFlag(flags: Record<string, string | boolean>, key: string): string | undefined {
+  const value = flags[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+async function ensureRuntime(): Promise<void> {
+  if (await healthFetch()) {
+    return;
+  }
+  await commandUp();
+}
+
+async function apiRequest<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
+  await ensureRuntime();
+  const paths = resolveWardPaths();
+  const state = await readRuntimeState(paths);
+  if (!state.port) {
+    throw new Error("WARD runtime port is unavailable.");
+  }
+  const token = await readDeviceToken(paths);
+  const headers = new Headers(init.headers);
+  headers.set("authorization", `Bearer ${token}`);
+  if (init.body && !headers.has("content-type") && !(init.body instanceof FormData)) {
+    headers.set("content-type", "application/json");
+  }
+  const response = await fetch(`http://127.0.0.1:${state.port}${path}`, {
+    ...init,
+    headers
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.ok === false) {
+    throw new Error(data?.error ?? `Request failed with ${response.status}`);
+  }
+  return data as T;
 }
 
 async function commandInit(): Promise<CliResult> {
@@ -367,6 +429,172 @@ async function commandAuth(args: string[]): Promise<CliResult> {
   };
 }
 
+async function commandProfile(args: string[]): Promise<CliResult> {
+  const [subcommand, key, ...rest] = args;
+  if (subcommand === "show" || subcommand === undefined) {
+    const data = await apiRequest("/api/profile");
+    return { ok: true, command: "profile show", timestamp: nowIso(), message: "WARD profile.", data };
+  }
+  if (subcommand === "set" && key && rest.length > 0) {
+    const raw = rest.join(" ");
+    const value = key === "tts_enabled" ? raw === "true" : Number.isFinite(Number(raw)) && ["tts_rate", "tts_pitch"].includes(key) ? Number(raw) : raw;
+    const data = await apiRequest("/api/profile", {
+      method: "PATCH",
+      body: JSON.stringify({ [key]: value })
+    });
+    return { ok: true, command: "profile set", timestamp: nowIso(), message: "WARD profile updated.", data };
+  }
+  throw new Error("Usage: ward profile show | ward profile set <key> <value>");
+}
+
+async function commandCreateWorkspace(args: string[]): Promise<CliResult> {
+  const parsed = parseFlags(args);
+  const name = parsed.positional.join(" ");
+  if (!name) {
+    throw new Error("Usage: ward create-workspace <name> [--description ...] [--repo <path>]");
+  }
+  const data = await apiRequest("/api/workspaces", {
+    method: "POST",
+    body: JSON.stringify({
+      name,
+      description: stringFlag(parsed.flags, "description") ?? "",
+      repo: stringFlag(parsed.flags, "repo"),
+      autonomy_level: stringFlag(parsed.flags, "autonomy") ?? "standard"
+    })
+  });
+  return { ok: true, command: "create-workspace", timestamp: nowIso(), message: "Workspace created.", data };
+}
+
+async function commandWorkspaces(): Promise<CliResult> {
+  const data = await apiRequest("/api/workspaces");
+  return { ok: true, command: "workspaces", timestamp: nowIso(), message: "WARD workspaces.", data };
+}
+
+async function commandWorkspace(args: string[]): Promise<CliResult> {
+  const [slug] = args;
+  if (!slug) {
+    throw new Error("Usage: ward workspace <slug>");
+  }
+  const data = await apiRequest(`/api/workspaces/${encodeURIComponent(slug)}`);
+  return { ok: true, command: "workspace", timestamp: nowIso(), message: "WARD workspace.", data };
+}
+
+async function commandAttach(args: string[]): Promise<CliResult> {
+  const [workspace, path] = args;
+  if (!workspace || !path) {
+    throw new Error("Usage: ward attach <workspace-slug> <path>");
+  }
+  const data = await apiRequest(`/api/workspaces/${encodeURIComponent(workspace)}/attachments`, {
+    method: "POST",
+    body: JSON.stringify({ path })
+  });
+  return { ok: true, command: "attach", timestamp: nowIso(), message: "Attachment ingested.", data };
+}
+
+async function commandTasks(args: string[]): Promise<CliResult> {
+  const parsed = parseFlags(args);
+  const workspace = stringFlag(parsed.flags, "workspace");
+  const suffix = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
+  const data = await apiRequest(`/api/tasks${suffix}`);
+  return { ok: true, command: "tasks", timestamp: nowIso(), message: "WARD tasks.", data };
+}
+
+async function commandTask(args: string[]): Promise<CliResult> {
+  const [subcommand, ...rest] = args;
+  if (!subcommand) {
+    throw new Error("Usage: ward task <task-id> | ward task create ...");
+  }
+
+  if (subcommand === "create") {
+    const parsed = parseFlags(rest);
+    const [workspace, ...titleParts] = parsed.positional;
+    const title = titleParts.join(" ");
+    if (!workspace || !title) {
+      throw new Error("Usage: ward task create <workspace-slug> <title> [--type ...] [--priority ...]");
+    }
+    const data = await apiRequest("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        workspace_slug: workspace,
+        title,
+        type: stringFlag(parsed.flags, "type") ?? "feature",
+        priority: stringFlag(parsed.flags, "priority") ?? "medium",
+        description: stringFlag(parsed.flags, "description") ?? ""
+      })
+    });
+    return { ok: true, command: "task create", timestamp: nowIso(), message: "Task created.", data };
+  }
+
+  if (subcommand === "transition") {
+    const parsed = parseFlags(rest);
+    const [taskId, status] = parsed.positional;
+    if (!taskId || !status) {
+      throw new Error("Usage: ward task transition <task-id> <status> [--phase ...] [--reason ...]");
+    }
+    const data = await apiRequest(`/api/tasks/${encodeURIComponent(taskId)}/transition`, {
+      method: "POST",
+      body: JSON.stringify({
+        status,
+        phase: stringFlag(parsed.flags, "phase"),
+        reason: stringFlag(parsed.flags, "reason") ?? "CLI transition"
+      })
+    });
+    return { ok: true, command: "task transition", timestamp: nowIso(), message: "Task transitioned.", data };
+  }
+
+  if (subcommand === "gate" && rest[0] === "open") {
+    const parsed = parseFlags(rest.slice(1));
+    const [taskId, gateType] = parsed.positional;
+    if (!taskId || !gateType) {
+      throw new Error("Usage: ward task gate open <task-id> <gate-type> --reason <reason>");
+    }
+    const data = await apiRequest(`/api/tasks/${encodeURIComponent(taskId)}/gates`, {
+      method: "POST",
+      body: JSON.stringify({
+        gate_type: gateType,
+        reason: stringFlag(parsed.flags, "reason") ?? "CLI gate",
+        requested_by: stringFlag(parsed.flags, "by") ?? "orchestrator"
+      })
+    });
+    return { ok: true, command: "task gate open", timestamp: nowIso(), message: "Task gate opened.", data };
+  }
+
+  if (subcommand === "approve" || subcommand === "reject") {
+    const parsed = parseFlags(rest);
+    const [taskId] = parsed.positional;
+    if (!taskId) {
+      throw new Error(`Usage: ward task ${subcommand} <task-id> [--gate <gate-id>] [--reason ...]`);
+    }
+    const data = await apiRequest(`/api/tasks/${encodeURIComponent(taskId)}/${subcommand}`, {
+      method: "POST",
+      body: JSON.stringify({
+        gate_id: stringFlag(parsed.flags, "gate"),
+        note: stringFlag(parsed.flags, "reason") ?? stringFlag(parsed.flags, "note")
+      })
+    });
+    return { ok: true, command: `task ${subcommand}`, timestamp: nowIso(), message: `Task gate ${subcommand}d.`, data };
+  }
+
+  if (subcommand === "artifact" && rest[0] === "add") {
+    const parsed = parseFlags(rest.slice(1));
+    const [taskId, path] = parsed.positional;
+    if (!taskId || !path) {
+      throw new Error("Usage: ward task artifact add <task-id> <path> [--kind ...]");
+    }
+    const data = await apiRequest(`/api/tasks/${encodeURIComponent(taskId)}/artifacts`, {
+      method: "POST",
+      body: JSON.stringify({
+        path,
+        artifact_kind: stringFlag(parsed.flags, "kind") ?? "file"
+      })
+    });
+    return { ok: true, command: "task artifact add", timestamp: nowIso(), message: "Task artifact attached.", data };
+  }
+
+  const data = await apiRequest(`/api/tasks/${encodeURIComponent(subcommand)}`);
+  return { ok: true, command: "task", timestamp: nowIso(), message: "WARD task.", data };
+}
+
 async function dispatch(args: string[]): Promise<CliResult> {
   const [command, ...rest] = args;
   switch (command) {
@@ -383,6 +611,20 @@ async function dispatch(args: string[]): Promise<CliResult> {
       return commandDoctor();
     case "auth":
       return commandAuth(rest);
+    case "profile":
+      return commandProfile(rest);
+    case "create-workspace":
+      return commandCreateWorkspace(rest);
+    case "workspaces":
+      return commandWorkspaces();
+    case "workspace":
+      return commandWorkspace(rest);
+    case "attach":
+      return commandAttach(rest);
+    case "tasks":
+      return commandTasks(rest);
+    case "task":
+      return commandTask(rest);
     default:
       throw new Error(`Unknown command: ${command}`);
   }

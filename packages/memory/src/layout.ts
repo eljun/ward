@@ -11,6 +11,7 @@ export type WardPaths = {
   sessionsDir: string;
   secretsDir: string;
   attachmentsDir: string;
+  workspacesDir: string;
   pidFile: string;
   portFile: string;
   lockFile: string;
@@ -32,6 +33,7 @@ export function resolveWardPaths(home = process.env.WARD_HOME ?? join(homedir(),
     sessionsDir: join(home, "sessions"),
     secretsDir: join(home, "secrets"),
     attachmentsDir: join(home, "attachments"),
+    workspacesDir: join(home, "workspaces"),
     pidFile: join(home, "run", "ward.pid"),
     portFile: join(home, "run", "ward.port"),
     lockFile: join(home, "run", "ward.lock"),
@@ -49,6 +51,7 @@ export async function ensureWardLayout(paths = resolveWardPaths()): Promise<void
   await mkdir(paths.sessionsDir, { recursive: true, mode: 0o700 });
   await mkdir(paths.secretsDir, { recursive: true, mode: 0o700 });
   await mkdir(paths.attachmentsDir, { recursive: true, mode: 0o700 });
+  await mkdir(paths.workspacesDir, { recursive: true, mode: 0o700 });
 
   await Promise.allSettled([
     chmod(paths.home, 0o700),

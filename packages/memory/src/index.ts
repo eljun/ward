@@ -4,3 +4,4 @@ export * from "./lock.ts";
 export * from "./logger.ts";
 export * from "./migrations.ts";
 export * from "./ports.ts";
+export * from "./repositories.ts";

@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "node-pty": "^1.0.0",
+    "pdf-parse": "^2.4.5",
     "zod": "^4.1.13"
   },
   "devDependencies": {

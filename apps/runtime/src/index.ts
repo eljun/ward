@@ -1,21 +1,54 @@
 import { existsSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
-import { WARD_VERSION, createEvent, createTraceId, type RuntimeHealth } from "@ward/core";
+import {
+  AddArtifactSchema,
+  CreateTaskSchema,
+  CreateWorkspaceSchema,
+  OpenGateSchema,
+  ProfilePatchSchema,
+  TransitionTaskSchema,
+  UpdateWorkspaceSchema,
+  WARD_VERSION,
+  createEvent,
+  createTraceId,
+  inferAttachmentKind,
+  type RuntimeHealth
+} from "@ward/core";
 import {
   acquireInstanceLock,
+  addTaskArtifact,
+  createTask,
+  createWorkspace,
   createLogger,
   ensureDeviceToken,
   ensureWardLayout,
   findAvailablePort,
   getCurrentSchemaVersion,
+  getProfile,
+  getTask,
+  getTaskEvents,
+  getTaskEvidence,
+  getWorkspaceByIdOrSlug,
+  getWorkspaceDetail,
+  ingestAttachmentBuffer,
+  ingestAttachmentFromPath,
   isPortAvailable,
+  listPreferences,
+  listTasks,
+  listWorkspaces,
   openWardDatabase,
+  openTaskGate,
   readDeviceToken,
   readPort,
+  resolveTaskGate,
   resolveRepoRoot,
   resolveWardPaths,
   runMigrations,
+  setPreference,
+  transitionTask,
+  updateProfile,
+  updateWorkspace,
   writePort
 } from "@ward/memory";
 
@@ -48,7 +81,48 @@ function json(data: unknown, status = 200): Response {
 async function authenticated(req: Request): Promise<boolean> {
   const paths = resolveWardPaths();
   const token = await readDeviceToken(paths);
-  return req.headers.get("authorization") === `Bearer ${token}`;
+  const cookieToken = req.headers.get("cookie")
+    ?.split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith("ward_device="))
+    ?.slice("ward_device=".length);
+  return req.headers.get("authorization") === `Bearer ${token}` || cookieToken === token;
+}
+
+async function readJson(req: Request): Promise<unknown> {
+  if (req.headers.get("content-length") === "0") {
+    return {};
+  }
+  return req.json().catch(() => ({}));
+}
+
+function route(url: URL): string[] {
+  return url.pathname.split("/").filter(Boolean).slice(1);
+}
+
+async function handleAttachmentUpload(req: Request, workspaceRef: string): Promise<Response> {
+  const contentType = req.headers.get("content-type") ?? "";
+  if (contentType.includes("multipart/form-data")) {
+    const form = await req.formData();
+    const file = form.get("file");
+    if (!(file instanceof File)) {
+      return json({ ok: false, error: "Missing file field" }, 400);
+    }
+    const attachment = await ingestAttachmentBuffer(workspaceRef, {
+      name: file.name,
+      bytes: await file.arrayBuffer(),
+      kind: inferAttachmentKind(file.name, file.type),
+      mimeType: file.type,
+      sourcePath: null
+    });
+    return json({ ok: true, attachment }, 201);
+  }
+
+  const body = await readJson(req) as { path?: string };
+  if (!body.path) {
+    return json({ ok: false, error: "Expected JSON body with path or multipart file upload" }, 400);
+  }
+  return json({ ok: true, attachment: await ingestAttachmentFromPath(workspaceRef, body.path) }, 201);
 }
 
 async function api(req: Request, startedAt: number, port: number): Promise<Response> {
@@ -77,6 +151,97 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
     }
   }
 
+  const parts = route(url);
+
+  try {
+    if (parts[0] === "profile" && req.method === "GET") {
+      return json({ ok: true, profile: getProfile() });
+    }
+
+    if (parts[0] === "profile" && req.method === "PATCH") {
+      return json({ ok: true, profile: updateProfile(ProfilePatchSchema.parse(await readJson(req))) });
+    }
+
+    if (parts[0] === "preferences" && req.method === "GET") {
+      return json({ ok: true, preferences: listPreferences() });
+    }
+
+    if (parts[0] === "preferences" && req.method === "PATCH" && parts[1] && parts[2]) {
+      const body = await readJson(req) as { value?: unknown; workspace_id?: number };
+      return json({ ok: true, preference: setPreference(parts[1] as "global" | "workspace" | "repo", parts[2], body.value, body.workspace_id) });
+    }
+
+    if (parts[0] === "workspaces" && req.method === "GET" && !parts[1]) {
+      return json({ ok: true, workspaces: listWorkspaces() });
+    }
+
+    if (parts[0] === "workspaces" && req.method === "POST" && !parts[1]) {
+      return json({ ok: true, workspace: await createWorkspace(CreateWorkspaceSchema.parse(await readJson(req))) }, 201);
+    }
+
+    if (parts[0] === "workspaces" && parts[1] && req.method === "GET" && !parts[2]) {
+      return json({ ok: true, ...getWorkspaceDetail(parts[1]) });
+    }
+
+    if (parts[0] === "workspaces" && parts[1] && req.method === "PATCH" && !parts[2]) {
+      const workspace = getWorkspaceByIdOrSlug(parts[1]);
+      if (!workspace) {
+        return json({ ok: false, error: "Workspace not found" }, 404);
+      }
+      return json({ ok: true, workspace: updateWorkspace(workspace.id, UpdateWorkspaceSchema.parse(await readJson(req))) });
+    }
+
+    if (parts[0] === "workspaces" && parts[1] && parts[2] === "attachments" && req.method === "POST") {
+      return await handleAttachmentUpload(req, parts[1]);
+    }
+
+    if (parts[0] === "tasks" && req.method === "GET" && !parts[1]) {
+      return json({ ok: true, tasks: listTasks({ workspace: url.searchParams.get("workspace") ?? undefined }) });
+    }
+
+    if (parts[0] === "tasks" && req.method === "POST" && !parts[1]) {
+      return json({ ok: true, task: createTask(CreateTaskSchema.parse(await readJson(req))) }, 201);
+    }
+
+    if (parts[0] === "tasks" && parts[1] && req.method === "GET" && !parts[2]) {
+      return json({ ok: true, ...getTask(parts[1]) });
+    }
+
+    if (parts[0] === "tasks" && parts[1] && parts[2] === "transition" && req.method === "POST") {
+      return json({ ok: true, task: transitionTask(parts[1], TransitionTaskSchema.parse(await readJson(req))) });
+    }
+
+    if (parts[0] === "tasks" && parts[1] && parts[2] === "gates" && req.method === "POST") {
+      return json({ ok: true, gate: openTaskGate(parts[1], OpenGateSchema.parse(await readJson(req))) }, 201);
+    }
+
+    if (parts[0] === "tasks" && parts[1] && parts[2] === "approve" && req.method === "POST") {
+      const body = await readJson(req) as { gate_id?: string; note?: string };
+      return json({ ok: true, gate: resolveTaskGate(parts[1], "approved", body) });
+    }
+
+    if (parts[0] === "tasks" && parts[1] && parts[2] === "reject" && req.method === "POST") {
+      const body = await readJson(req) as { gate_id?: string; note?: string };
+      return json({ ok: true, gate: resolveTaskGate(parts[1], "rejected", body) });
+    }
+
+    if (parts[0] === "tasks" && parts[1] && parts[2] === "artifacts" && req.method === "POST") {
+      return json({ ok: true, artifact: addTaskArtifact(parts[1], AddArtifactSchema.parse(await readJson(req))) }, 201);
+    }
+
+    if (parts[0] === "tasks" && parts[1] && parts[2] === "events" && req.method === "GET") {
+      return json({ ok: true, events: getTaskEvents(parts[1]) });
+    }
+
+    if (parts[0] === "tasks" && parts[1] && parts[2] === "evidence" && req.method === "GET") {
+      return json({ ok: true, ...getTaskEvidence(parts[1]) });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const status = message.toLowerCase().includes("not found") ? 404 : 400;
+    return json({ ok: false, error: message }, status);
+  }
+
   if (url.pathname === "/api/events") {
     const event = createEvent({
       event_type: "runtime.sse_connected",
@@ -100,6 +265,8 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
 
 async function serveStatic(req: Request, repoRoot: string): Promise<Response> {
   const url = new URL(req.url);
+  const paths = resolveWardPaths();
+  const token = await readDeviceToken(paths).catch(() => null);
   const staticRoot = join(repoRoot, "apps", "ui", "dist");
   const rawPath = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
   const normalized = normalize(rawPath).replace(/^(\.\.(\/|\\|$))+/, "");
@@ -114,12 +281,20 @@ async function serveStatic(req: Request, repoRoot: string): Promise<Response> {
   <head><meta charset="utf-8"><title>WARD</title></head>
   <body><main><h1>WARD Runtime</h1><p>Runtime is serving. Build apps/ui for the Vite shell.</p></main></body>
 </html>`,
-      { headers: { "content-type": "text/html; charset=utf-8" } }
+      {
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+          ...(token ? { "set-cookie": `ward_device=${token}; Path=/; SameSite=Strict` } : {})
+        }
+      }
     );
   }
 
   return new Response(Bun.file(path), {
-    headers: { "content-type": contentType(path) }
+    headers: {
+      "content-type": contentType(path),
+      ...(token && path.endsWith("index.html") ? { "set-cookie": `ward_device=${token}; Path=/; SameSite=Strict` } : {})
+    }
   });
 }
 

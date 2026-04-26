@@ -1,6 +1,6 @@
 # Task 003: Workspace State, User Profile, and Attachments
 
-- Status: `planned`
+- Status: `done`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `high`
