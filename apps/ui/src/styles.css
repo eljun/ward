@@ -18,7 +18,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -38,7 +39,8 @@ button:disabled {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   min-height: 38px;
   border: 1px solid #cfd5cf;
@@ -46,6 +48,14 @@ select {
   background: #fff;
   color: #1b2328;
   padding: 8px 10px;
+}
+
+textarea {
+  min-height: 360px;
+  resize: vertical;
+  line-height: 1.5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9rem;
 }
 
 label {
@@ -118,6 +128,13 @@ h2 {
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.85fr);
 }
 
+.memory-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(0, 1.4fr) minmax(260px, 0.8fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
 .panel {
   border: 1px solid #d6dcd6;
   border-radius: 8px;
@@ -166,6 +183,10 @@ h2 {
   max-height: 220px;
 }
 
+.memory-pages {
+  max-height: 420px;
+}
+
 .item {
   width: 100%;
   min-height: 58px;
@@ -190,6 +211,45 @@ h2 {
 .item span {
   color: #667178;
   font-size: 0.84rem;
+}
+
+.item small {
+  color: #59656a;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.actions,
+.search-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.search-form {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.history {
+  display: grid;
+  gap: 8px;
+  max-height: 140px;
+  overflow: auto;
+}
+
+.history div {
+  display: grid;
+  gap: 2px;
+  border-top: 1px solid #edf0ed;
+  padding-top: 8px;
+  color: #59656a;
+  font-size: 0.84rem;
+}
+
+.history strong {
+  color: #1b2328;
+  overflow-wrap: anywhere;
 }
 
 .table {
@@ -221,6 +281,7 @@ h2 {
   .topbar,
   .grid,
   .detail-grid,
+  .memory-grid,
   .task-form,
   .row {
     grid-template-columns: 1fr;

@@ -2,10 +2,6 @@
 
 ## Planned
 
-- [ ] `4` Git-Backed Wiki Memory
-  - Doc: [docs/task/004-wiki-memory.md](docs/task/004-wiki-memory.md)
-  - Goal: Universal + per-workspace wikis backed by git; conventions; FTS5 search across wiki, sessions, plan packets; lint pass.
-
 - [ ] `5` Warm-Start Pipeline, Overview, Handoff, and TTS
   - Doc: [docs/task/005-warm-start-overview-handoff.md](docs/task/005-warm-start-overview-handoff.md)
   - Goal: Precompute pipeline; daily brief (structured + narrated); Overview screen; end-of-session handoff writer; browser TTS.
@@ -64,8 +60,26 @@ None
 - task artifact attach verified with SHA-256 checksum
 - repeated `ward init` leaves schema at version 2 with no new migrations
 - `WARD_HOME=/tmp/ward-codex-smoke bun run ward --json doctor`
+- `WARD_HOME=/tmp/ward-codex-task004-smoke bun run ward --json init`
+- fresh init creates `~/.ward/memory/.git`, universal wiki seed pages, and schema version 3
+- `WARD_HOME=/tmp/ward-codex-task004-smoke bun run ward --json doctor`
+- `WARD_HOME=/tmp/ward-codex-task004-smoke bun run ward --json create-workspace "Task Four Smoke" --description "Wiki memory verification" --repo /Users/eleazarjunsan/Code/Personal/ward`
+- workspace creation seeds `workspaces/task-four-smoke/wiki/*.md` and commits `[user] workspace: seed task-four-smoke`
+- `ward wiki list`, `ward wiki read`, and `ward wiki history` verified for universal and workspace scopes
+- `ward search verification --scope task-four-smoke` returns the workspace wiki overview hit
+- API wiki write commits `[user] wiki: smoke decisions` and incremental FTS returns the updated `decisions.md` hit
+- API wiki append with `author: "llm"` commits `[llm] wiki: llm session note` and indexes the appended text
+- `ward wiki reindex` rebuilds the FTS index successfully
+- LLM write over a dirty wiki page rejects with `wiki.conflict_detected`
+- `ward wiki lint --scope task-four-smoke` returns no findings for seeded pages
+- runtime-served built UI root returns 200 and serves Vite assets
+- `bun run build`
 
 ## Done
+
+- [x] `4` Git-Backed Wiki Memory
+  - Doc: [docs/task/004-wiki-memory.md](docs/task/004-wiki-memory.md)
+  - Goal: Universal + per-workspace wikis backed by git; conventions; FTS5 search across wiki, sessions, plan packets; lint pass.
 
 - [x] `3` Workspace State, User Profile, and Attachments
   - Doc: [docs/task/003-workspace-state.md](docs/task/003-workspace-state.md)

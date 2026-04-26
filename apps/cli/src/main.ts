@@ -1,23 +1,27 @@
 #!/usr/bin/env bun
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, statSync } from "node:fs";
-import { chmod } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { resolve } from "node:path";
 import { CliResultSchema, type CliResult, type DoctorCheck, nowIso } from "@ward/core";
 import {
   ensureDeviceToken,
+  ensureMemoryBootstrap,
   ensureWardLayout,
   findAvailablePort,
   getCurrentSchemaVersion,
   isPortAvailable,
   readDeviceToken,
   readRuntimeState,
+  rebuildSearchIndex,
   resolveRepoRoot,
   resolveWardPaths,
   rotateDeviceToken,
-  runMigrations
+  runMigrations,
+  checkMemoryGit
 } from "@ward/memory";
 import { openWardDatabase } from "@ward/memory";
 
@@ -147,6 +151,8 @@ async function commandInit(): Promise<CliResult> {
   await ensureWardLayout(paths);
   await ensureDeviceToken(paths);
   const migrations = await runMigrations(paths, { repoRoot });
+  await ensureMemoryBootstrap(paths);
+  await rebuildSearchIndex(paths);
   return {
     ok: true,
     command: "init",
@@ -155,6 +161,7 @@ async function commandInit(): Promise<CliResult> {
     data: {
       home: paths.home,
       db: paths.dbFile,
+      memory: paths.memoryDir,
       schema_version: migrations.currentVersion,
       migrations_applied: migrations.applied
     }
@@ -382,6 +389,19 @@ async function commandDoctor(): Promise<CliResult> {
     checks.push({ name: "schema", status: "fail", detail: String(error) });
   }
 
+  try {
+    await ensureMemoryBootstrap(paths);
+    await rebuildSearchIndex(paths);
+    const memoryGit = checkMemoryGit(paths);
+    checks.push({
+      name: "memory_git",
+      status: memoryGit.ok ? "pass" : "fail",
+      detail: memoryGit.detail
+    });
+  } catch (error) {
+    checks.push({ name: "memory_git", status: "fail", detail: error instanceof Error ? error.message : String(error) });
+  }
+
   checks.push({
     name: "keychain",
     status: commandExists("security") ? "pass" : "warn",
@@ -595,6 +615,116 @@ async function commandTask(args: string[]): Promise<CliResult> {
   return { ok: true, command: "task", timestamp: nowIso(), message: "WARD task.", data };
 }
 
+function encodePathSegments(value: string): string {
+  return value.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+}
+
+function wikiScopePath(scope: string): string {
+  if (scope === "universal") {
+    return "universal";
+  }
+  if (scope.startsWith("workspace/")) {
+    const slug = scope.slice("workspace/".length);
+    return `workspace/${encodeURIComponent(slug)}`;
+  }
+  return `workspace/${encodeURIComponent(scope)}`;
+}
+
+async function commandWiki(args: string[]): Promise<CliResult> {
+  const [subcommand = "list", ...rest] = args;
+
+  if (subcommand === "list") {
+    const parsed = parseFlags(rest);
+    const scope = stringFlag(parsed.flags, "scope") ?? parsed.positional[0] ?? "universal";
+    const data = await apiRequest(`/api/wiki/${wikiScopePath(scope)}`);
+    return { ok: true, command: "wiki list", timestamp: nowIso(), message: "WARD wiki pages.", data };
+  }
+
+  if (subcommand === "read") {
+    const [scope, page] = rest;
+    if (!scope || !page) {
+      throw new Error("Usage: ward wiki read <scope> <page>");
+    }
+    const data = await apiRequest(`/api/wiki/${wikiScopePath(scope)}/${encodePathSegments(page)}`);
+    return { ok: true, command: "wiki read", timestamp: nowIso(), message: "WARD wiki page.", data };
+  }
+
+  if (subcommand === "edit") {
+    const [scope, page] = rest;
+    if (!scope || !page) {
+      throw new Error("Usage: ward wiki edit <scope> <page>");
+    }
+    const current = await apiRequest<{ page: { body: string } }>(`/api/wiki/${wikiScopePath(scope)}/${encodePathSegments(page)}`)
+      .catch((error) => {
+        if (error instanceof Error && error.message.toLowerCase().includes("not found")) {
+          const title = page.replace(/\.md$/, "").replace(/[-_]+/g, " ");
+          return { page: { body: `# ${title}\n\n` } };
+        }
+        throw error;
+      });
+    const tempDir = await mkdtemp(join(tmpdir(), "ward-wiki-"));
+    const tempFile = join(tempDir, page.replace(/[\\/]+/g, "__"));
+    try {
+      await writeFile(tempFile, current.page.body, "utf8");
+      const editor = process.env.EDITOR ?? "vi";
+      const result = spawnSync(editor, [tempFile], { stdio: "inherit" });
+      if (result.status !== 0) {
+        throw new Error(`${editor} exited with ${result.status ?? "unknown status"}`);
+      }
+      const nextBody = await readFile(tempFile, "utf8");
+      if (nextBody === current.page.body) {
+        return { ok: true, command: "wiki edit", timestamp: nowIso(), message: "Wiki page unchanged.", data: current };
+      }
+      const data = await apiRequest(`/api/wiki/${wikiScopePath(scope)}/${encodePathSegments(page)}`, {
+        method: "PUT",
+        body: JSON.stringify({ body: nextBody, author: "user", summary: `wiki: edit ${scope}/${page}` })
+      });
+      return { ok: true, command: "wiki edit", timestamp: nowIso(), message: "Wiki page saved.", data };
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  }
+
+  if (subcommand === "history") {
+    const [scope, page] = rest;
+    if (!scope || !page) {
+      throw new Error("Usage: ward wiki history <scope> <page>");
+    }
+    const data = await apiRequest(`/api/wiki/${wikiScopePath(scope)}/${encodePathSegments(page)}/history`);
+    return { ok: true, command: "wiki history", timestamp: nowIso(), message: "WARD wiki history.", data };
+  }
+
+  if (subcommand === "reindex") {
+    const data = await apiRequest("/api/wiki/reindex", { method: "POST", body: JSON.stringify({}) });
+    return { ok: true, command: "wiki reindex", timestamp: nowIso(), message: "WARD wiki search reindexed.", data };
+  }
+
+  if (subcommand === "lint") {
+    const parsed = parseFlags(rest);
+    const scope = stringFlag(parsed.flags, "scope");
+    const suffix = scope ? `?scope=${encodeURIComponent(scope)}` : "";
+    const data = await apiRequest(`/api/wiki/lint${suffix}`);
+    return { ok: true, command: "wiki lint", timestamp: nowIso(), message: "WARD wiki lint.", data };
+  }
+
+  throw new Error("Usage: ward wiki list|read|edit|history|reindex|lint");
+}
+
+async function commandSearch(args: string[]): Promise<CliResult> {
+  const parsed = parseFlags(args);
+  const query = parsed.positional.join(" ");
+  if (!query) {
+    throw new Error("Usage: ward search <query> [--scope universal|<workspace-slug>]");
+  }
+  const params = new URLSearchParams({ q: query });
+  const scope = stringFlag(parsed.flags, "scope");
+  if (scope) {
+    params.set("scope", scope);
+  }
+  const data = await apiRequest(`/api/search?${params.toString()}`);
+  return { ok: true, command: "search", timestamp: nowIso(), message: "WARD search.", data };
+}
+
 async function dispatch(args: string[]): Promise<CliResult> {
   const [command, ...rest] = args;
   switch (command) {
@@ -625,6 +755,10 @@ async function dispatch(args: string[]): Promise<CliResult> {
       return commandTasks(rest);
     case "task":
       return commandTask(rest);
+    case "wiki":
+      return commandWiki(rest);
+    case "search":
+      return commandSearch(rest);
     default:
       throw new Error(`Unknown command: ${command}`);
   }

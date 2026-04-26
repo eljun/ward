@@ -42,6 +42,36 @@ type WorkspaceDetail = {
   tasks: Task[];
 };
 
+type WikiPageSummary = {
+  scope: string;
+  page: string;
+  title: string;
+  path: string;
+  updated_at: string | null;
+  last_author: "user" | "llm" | "system" | null;
+  bytes: number;
+};
+
+type WikiPage = WikiPageSummary & {
+  body: string;
+};
+
+type WikiCommit = {
+  hash: string;
+  author_name: string;
+  authored_at: string;
+  subject: string;
+};
+
+type SearchHit = {
+  doc_id: string;
+  kind: "wiki" | "session" | "plan_packet";
+  scope: string;
+  title: string;
+  path: string | null;
+  snippet: string;
+};
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -57,6 +87,20 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return data;
 }
 
+function encodePathSegments(value: string): string {
+  return value.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+}
+
+function scopePath(scope: string): string {
+  if (scope === "universal") {
+    return "universal";
+  }
+  if (scope.startsWith("workspace/")) {
+    return `workspace/${encodeURIComponent(scope.slice("workspace/".length))}`;
+  }
+  return `workspace/${encodeURIComponent(scope)}`;
+}
+
 function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -65,6 +109,13 @@ function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [memoryScope, setMemoryScope] = useState("universal");
+  const [wikiPages, setWikiPages] = useState<WikiPageSummary[]>([]);
+  const [selectedPage, setSelectedPage] = useState("");
+  const [wikiPage, setWikiPage] = useState<WikiPage | null>(null);
+  const [wikiBody, setWikiBody] = useState("");
+  const [commits, setCommits] = useState<WikiCommit[]>([]);
+  const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
 
   const selectedWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.slug === selectedSlug) ?? null,
@@ -93,6 +144,29 @@ function App() {
     setDetail(response);
   }
 
+  async function readMemoryPage(scope: string, page: string) {
+    const response = await api<{ page: WikiPage }>(`/api/wiki/${scopePath(scope)}/${encodePathSegments(page)}`);
+    setSelectedPage(response.page.page);
+    setWikiPage(response.page);
+    setWikiBody(response.page.body);
+    const history = await api<{ commits: WikiCommit[] }>(`/api/wiki/${scopePath(scope)}/${encodePathSegments(response.page.page)}/history`);
+    setCommits(history.commits.slice(0, 5));
+  }
+
+  async function refreshMemory(scope = memoryScope, preferredPage = selectedPage) {
+    const response = await api<{ pages: WikiPageSummary[] }>(`/api/wiki/${scopePath(scope)}`);
+    setWikiPages(response.pages);
+    const nextPage = response.pages.find((page) => page.page === preferredPage)?.page ?? response.pages[0]?.page ?? "";
+    if (nextPage) {
+      await readMemoryPage(scope, nextPage);
+    } else {
+      setSelectedPage("");
+      setWikiPage(null);
+      setWikiBody("");
+      setCommits([]);
+    }
+  }
+
   useEffect(() => {
     refresh().catch((err) => setError(err.message));
   }, []);
@@ -100,6 +174,10 @@ function App() {
   useEffect(() => {
     refreshDetail(selectedSlug).catch((err) => setError(err.message));
   }, [selectedSlug]);
+
+  useEffect(() => {
+    refreshMemory(memoryScope, "").catch((err) => setError(err.message));
+  }, [memoryScope]);
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -167,6 +245,32 @@ function App() {
     event.currentTarget.reset();
     setMessage("Attachment ingested.");
     await refreshDetail(selectedWorkspace.slug);
+  }
+
+  async function saveWikiPage() {
+    if (!selectedPage) {
+      return;
+    }
+    const response = await api<{ page: WikiPage }>(`/api/wiki/${scopePath(memoryScope)}/${encodePathSegments(selectedPage)}`, {
+      method: "PUT",
+      body: JSON.stringify({ body: wikiBody, author: "user", summary: `wiki: edit ${memoryScope}/${selectedPage}` })
+    });
+    setWikiPage(response.page);
+    setMessage("Wiki page saved.");
+    await refreshMemory(memoryScope, response.page.page);
+  }
+
+  async function search(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const query = String(form.get("q") ?? "").trim();
+    if (!query) {
+      setSearchHits([]);
+      return;
+    }
+    const params = new URLSearchParams({ q: query, scope: memoryScope });
+    const response = await api<{ hits: SearchHit[] }>(`/api/search?${params.toString()}`);
+    setSearchHits(response.hits);
   }
 
   return (
@@ -294,6 +398,96 @@ function App() {
                 <strong>{attachment.name}</strong>
                 <span>{attachment.kind} · {attachment.bytes} bytes</span>
               </div>
+            ))}
+          </div>
+        </section>
+      </section>
+
+      <section className="memory-grid">
+        <section className="panel memory-tree">
+          <div className="panel-title">
+            <h2>Memory</h2>
+            <span>{wikiPages.length}</span>
+          </div>
+          <select value={memoryScope} onChange={(event) => setMemoryScope(event.target.value)}>
+            <option value="universal">Universal</option>
+            {workspaces.map((workspace) => (
+              <option key={workspace.id} value={`workspace/${workspace.slug}`}>
+                {workspace.name}
+              </option>
+            ))}
+          </select>
+          <div className="list memory-pages">
+            {wikiPages.map((page) => (
+              <button
+                className={page.page === selectedPage ? "item active" : "item"}
+                key={page.path}
+                type="button"
+                onClick={() => readMemoryPage(memoryScope, page.page).catch((err) => setError(err.message))}
+              >
+                <strong>{page.title}</strong>
+                <span>{page.page} · {page.last_author ?? "new"}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel memory-reader">
+          <div className="panel-title">
+            <h2>{wikiPage?.title ?? "Page"}</h2>
+            <span>{wikiPage?.last_author ? `last ${wikiPage.last_author}` : "draft"}</span>
+          </div>
+          <textarea
+            value={wikiBody}
+            onChange={(event) => setWikiBody(event.target.value)}
+            disabled={!selectedPage}
+            spellCheck
+          />
+          <div className="actions">
+            <button type="button" disabled={!selectedPage} onClick={() => saveWikiPage().catch((err) => setError(err.message))}>
+              Save
+            </button>
+            <button type="button" disabled={!selectedPage} onClick={() => refreshMemory(memoryScope, selectedPage).catch((err) => setError(err.message))}>
+              Reload
+            </button>
+          </div>
+          <div className="history">
+            {commits.map((commit) => (
+              <div key={commit.hash}>
+                <strong>{commit.subject}</strong>
+                <span>{commit.hash.slice(0, 7)} · {commit.author_name}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel memory-search">
+          <div className="panel-title">
+            <h2>Search</h2>
+            <span>{searchHits.length}</span>
+          </div>
+          <form className="search-form" onSubmit={search}>
+            <input name="q" placeholder="Query" />
+            <button type="submit">Go</button>
+          </form>
+          <div className="list compact">
+            {searchHits.map((hit) => (
+              <button
+                className="item"
+                key={hit.doc_id}
+                type="button"
+                onClick={() => {
+                  if (hit.kind === "wiki" && hit.path) {
+                    const page = hit.path.split("/").slice(hit.scope === "universal" ? 1 : 3).join("/");
+                    setMemoryScope(hit.scope);
+                    readMemoryPage(hit.scope, page).catch((err) => setError(err.message));
+                  }
+                }}
+              >
+                <strong>{hit.title}</strong>
+                <span>{hit.kind} · {hit.scope}</span>
+                <small>{hit.snippet}</small>
+              </button>
             ))}
           </div>
         </section>

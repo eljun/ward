@@ -47,6 +47,7 @@ import {
 import type { Database } from "bun:sqlite";
 import { ensureWardLayout, resolveWardPaths, type WardPaths } from "./layout.ts";
 import { openWardDatabase } from "./migrations.ts";
+import { ensureMemoryBootstrap, ensureWorkspaceWiki } from "./wiki.ts";
 
 type WorkspaceRow = Omit<Workspace, "last_opened_at" | "primary_repo_path"> & {
   primary_repo_path: string | null;
@@ -304,6 +305,7 @@ export async function createWorkspace(input: CreateWorkspaceInput): Promise<Work
   const data = CreateWorkspaceSchema.parse(input);
   return withDbAsync(async (db, paths) => {
     await ensureWardLayout(paths);
+    await ensureMemoryBootstrap(paths);
     const timestamp = nowIso();
     const slug = uniqueSlug(db, data.name);
     db.query(`
@@ -320,6 +322,8 @@ export async function createWorkspace(input: CreateWorkspaceInput): Promise<Work
         VALUES (?, ?, NULL, 1, 1)
       `).run(workspace.id, resolve(data.repo));
     }
+
+    await ensureWorkspaceWiki(workspace, paths, db);
 
     recordSystemEvent(db, createEvent({
       event_type: "workspace.created",

@@ -3,13 +3,16 @@ import { unlink } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import {
   AddArtifactSchema,
+  AppendWikiPageSchema,
   CreateTaskSchema,
   CreateWorkspaceSchema,
   OpenGateSchema,
   ProfilePatchSchema,
+  SearchQuerySchema,
   TransitionTaskSchema,
   UpdateWorkspaceSchema,
   WARD_VERSION,
+  WriteWikiPageSchema,
   createEvent,
   createTraceId,
   inferAttachmentKind,
@@ -18,10 +21,12 @@ import {
 import {
   acquireInstanceLock,
   addTaskArtifact,
+  appendWikiPage,
   createTask,
   createWorkspace,
   createLogger,
   ensureDeviceToken,
+  ensureMemoryBootstrap,
   ensureWardLayout,
   findAvailablePort,
   getCurrentSchemaVersion,
@@ -34,21 +39,28 @@ import {
   ingestAttachmentBuffer,
   ingestAttachmentFromPath,
   isPortAvailable,
+  lintWiki,
+  listWikiPages,
   listPreferences,
   listTasks,
   listWorkspaces,
   openWardDatabase,
   openTaskGate,
+  readWikiPage,
+  rebuildSearchIndex,
   readDeviceToken,
   readPort,
   resolveTaskGate,
   resolveRepoRoot,
   resolveWardPaths,
   runMigrations,
+  searchMemory,
   setPreference,
   transitionTask,
   updateProfile,
   updateWorkspace,
+  wikiPageHistory,
+  writeWikiPage,
   writePort
 } from "@ward/memory";
 
@@ -98,6 +110,23 @@ async function readJson(req: Request): Promise<unknown> {
 
 function route(url: URL): string[] {
   return url.pathname.split("/").filter(Boolean).slice(1);
+}
+
+function wikiRoute(parts: string[]): { scope: string; pageParts: string[] } {
+  if (parts[1] === "universal") {
+    return { scope: "universal", pageParts: parts.slice(2) };
+  }
+  if (parts[1] === "workspace" && parts[2]) {
+    return { scope: `workspace/${parts[2]}`, pageParts: parts.slice(3) };
+  }
+  throw new Error("Expected wiki scope: universal or workspace/<slug>");
+}
+
+function joinedPage(parts: string[]): string {
+  if (parts.length === 0) {
+    throw new Error("Wiki page is required.");
+  }
+  return parts.join("/");
 }
 
 async function handleAttachmentUpload(req: Request, workspaceRef: string): Promise<Response> {
@@ -169,6 +198,53 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
     if (parts[0] === "preferences" && req.method === "PATCH" && parts[1] && parts[2]) {
       const body = await readJson(req) as { value?: unknown; workspace_id?: number };
       return json({ ok: true, preference: setPreference(parts[1] as "global" | "workspace" | "repo", parts[2], body.value, body.workspace_id) });
+    }
+
+    if (parts[0] === "search" && req.method === "GET") {
+      const parsed = SearchQuerySchema.parse({
+        q: url.searchParams.get("q") ?? "",
+        scope: url.searchParams.get("scope") ?? undefined,
+        limit: url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined
+      });
+      return json({ ok: true, hits: await searchMemory(parsed.q, { scope: parsed.scope, limit: parsed.limit }) });
+    }
+
+    if (parts[0] === "wiki" && parts[1] === "reindex" && req.method === "POST") {
+      await rebuildSearchIndex();
+      return json({ ok: true, reindexed: true });
+    }
+
+    if (parts[0] === "wiki" && parts[1] === "lint" && req.method === "GET") {
+      const findings = await lintWiki(url.searchParams.get("scope") ?? undefined);
+      return json({ ok: true, findings });
+    }
+
+    if (parts[0] === "wiki") {
+      const parsed = wikiRoute(parts);
+      if (req.method === "GET" && parsed.pageParts.length === 0) {
+        return json({ ok: true, pages: await listWikiPages(parsed.scope) });
+      }
+
+      if (req.method === "GET" && parsed.pageParts.at(-1) === "history") {
+        return json({ ok: true, commits: await wikiPageHistory(parsed.scope, joinedPage(parsed.pageParts.slice(0, -1))) });
+      }
+
+      if (req.method === "GET") {
+        return json({ ok: true, page: await readWikiPage(parsed.scope, joinedPage(parsed.pageParts)) });
+      }
+
+      if (req.method === "PUT") {
+        const body = WriteWikiPageSchema.parse(await readJson(req));
+        return json({ ok: true, page: await writeWikiPage(parsed.scope, joinedPage(parsed.pageParts), body.body, body.author, body.summary) });
+      }
+
+      if (req.method === "POST" && parsed.pageParts.at(-1) === "append") {
+        const body = AppendWikiPageSchema.parse(await readJson(req));
+        return json({
+          ok: true,
+          page: await appendWikiPage(parsed.scope, joinedPage(parsed.pageParts.slice(0, -1)), body.section, body.author, body.summary)
+        });
+      }
     }
 
     if (parts[0] === "workspaces" && req.method === "GET" && !parts[1]) {
@@ -313,6 +389,8 @@ export async function startRuntime(): Promise<void> {
   await ensureWardLayout(paths);
   await ensureDeviceToken(paths);
   await runMigrations(paths, { repoRoot });
+  await ensureMemoryBootstrap(paths);
+  await rebuildSearchIndex(paths);
 
   const lock = acquireInstanceLock(paths);
   const logger = await createLogger(paths);

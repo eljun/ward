@@ -1,6 +1,6 @@
 # Task 004: Git-Backed Wiki Memory
 
-- Status: `planned`
+- Status: `done`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `high`
@@ -12,6 +12,19 @@ Create the universal + per-workspace wiki structure as a git-backed
 directory tree. Define conventions, support concurrent LLM + human edits via
 standard git merging, add simple full-text search over wiki and state, and
 wire basic wiki I/O into the Runtime.
+
+## Implementation Notes
+
+- `~/.ward/memory/` is bootstrapped on `ward init` and runtime startup.
+- Universal seed pages and `SCHEMA.md` are committed to a local `main`
+  branch with `[user] init memory wiki`.
+- Workspace creation seeds `workspaces/<slug>/wiki/*.md` and commits
+  `[user] workspace: seed <slug>`.
+- `GitBackedLocalMemory` implements the `MemoryBackend` seam.
+- `SqliteFts5Search` implements the `SearchBackend` seam over wiki pages,
+  session summaries, and task contracts as early plan-packet documents.
+- LLM writes reject dirty target pages and emit `wiki.conflict_detected`.
+- `ward doctor` now verifies memory git integrity with `git fsck`.
 
 ## In Scope
 
@@ -134,16 +147,16 @@ touching callers.
 
 ## Acceptance Criteria
 
-1. Fresh init creates memory tree and `.git` repo with an initial commit.
-2. Creating a workspace creates its wiki subtree with seed pages.
-3. LLM-authored write commits with `[llm]` prefix; human write commits with
+1. [x] Fresh init creates memory tree and `.git` repo with an initial commit.
+2. [x] Creating a workspace creates its wiki subtree with seed pages.
+3. [x] LLM-authored write commits with `[llm]` prefix; human write commits with
    `[user]` prefix.
-4. Conflict simulation: external manual edit to a page, then LLM edit of the
+4. [x] Conflict simulation: external manual edit to a page, then LLM edit of the
    same page — merge succeeds or aborts with `wiki.conflict_detected` event.
-5. FTS5 search returns hits across wiki, sessions, and plan packets.
-6. `ward wiki lint` flags broken links and orphan pages.
-7. Wiki page history API returns correct git log entries.
-8. `.git` repo integrity check in `ward doctor` passes.
+5. [x] FTS5 search returns hits across wiki, sessions, and plan packets.
+6. [x] `ward wiki lint` flags broken links and orphan pages.
+7. [x] Wiki page history API returns correct git log entries.
+8. [x] `.git` repo integrity check in `ward doctor` passes.
 
 ## Deliverables
 
@@ -161,3 +174,20 @@ touching callers.
   install guide. No pure-JS git library for MVP.
 - Large wiki pages (several MB) slow FTS indexing: chunked indexing with
   a size warning.
+
+## Verification
+
+- `WARD_HOME=/tmp/ward-codex-task004-smoke bun run ward --json init`
+- `WARD_HOME=/tmp/ward-codex-task004-smoke bun run ward --json doctor`
+- `WARD_HOME=/tmp/ward-codex-task004-smoke bun run ward --json create-workspace "Task Four Smoke" --description "Wiki memory verification" --repo /Users/eleazarjunsan/Code/Personal/ward`
+- `WARD_HOME=/tmp/ward-codex-task004-smoke bun run ward --json wiki list --scope universal`
+- `WARD_HOME=/tmp/ward-codex-task004-smoke bun run ward --json wiki list --scope task-four-smoke`
+- `WARD_HOME=/tmp/ward-codex-task004-smoke bun run ward --json wiki read task-four-smoke overview.md`
+- `WARD_HOME=/tmp/ward-codex-task004-smoke bun run ward --json wiki history task-four-smoke overview.md`
+- `WARD_HOME=/tmp/ward-codex-task004-smoke bun run ward --json search verification --scope task-four-smoke`
+- `WARD_HOME=/tmp/ward-codex-task004-smoke bun run ward --json wiki lint --scope task-four-smoke`
+- `WARD_HOME=/tmp/ward-codex-task004-smoke bun run ward --json wiki reindex`
+- API write to `decisions.md` returned 200, committed `[user] wiki: smoke decisions`, and search returned the updated page.
+- API append to `sessions.md` with `author: "llm"` returned 200, committed `[llm] wiki: llm session note`, and search returned the appended page.
+- Dirty-page LLM write returned 400 with `Wiki conflict detected...`.
+- `bun run build`
