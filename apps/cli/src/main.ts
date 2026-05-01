@@ -34,7 +34,7 @@ type ParsedArgs = {
 
 type FlagParse = {
   positional: string[];
-  flags: Record<string, string | boolean>;
+  flags: Record<string, string | boolean | string[]>;
 };
 
 const require = createRequire(import.meta.url);
@@ -92,7 +92,7 @@ async function healthFetch(): Promise<unknown | null> {
 
 function parseFlags(args: string[]): FlagParse {
   const positional: string[] = [];
-  const flags: Record<string, string | boolean> = {};
+  const flags: Record<string, string | boolean | string[]> = {};
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (!arg.startsWith("--")) {
@@ -104,24 +104,44 @@ function parseFlags(args: string[]): FlagParse {
     if (!next || next.startsWith("--")) {
       flags[key] = true;
     } else {
-      flags[key] = next;
+      const existing = flags[key];
+      if (Array.isArray(existing)) {
+        existing.push(next);
+      } else if (typeof existing === "string") {
+        flags[key] = [existing, next];
+      } else {
+        flags[key] = next;
+      }
       index += 1;
     }
   }
   return { positional, flags };
 }
 
-function stringFlag(flags: Record<string, string | boolean>, key: string): string | undefined {
+function stringFlag(flags: Record<string, string | boolean | string[]>, key: string): string | undefined {
   const value = flags[key];
+  if (Array.isArray(value)) {
+    return value.at(-1);
+  }
   return typeof value === "string" ? value : undefined;
 }
 
-function listFlag(flags: Record<string, string | boolean>, key: string): string[] {
-  const value = stringFlag(flags, key);
-  if (!value) {
+function listFlag(flags: Record<string, string | boolean | string[]>, key: string): string[] {
+  const value = flags[key];
+  if (!value || value === true) {
     return [];
   }
-  return value.split(";").map((item) => item.trim()).filter(Boolean);
+  const values = Array.isArray(value) ? value : [value];
+  return values.flatMap((item) => item.split(";").map((part) => part.trim()).filter(Boolean));
+}
+
+function numberFlag(flags: Record<string, string | boolean | string[]>, key: string): number | undefined {
+  const value = stringFlag(flags, key);
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 async function ensureRuntime(): Promise<void> {
@@ -921,8 +941,57 @@ async function commandHandoff(args: string[]): Promise<CliResult> {
 
 async function commandSession(args: string[]): Promise<CliResult> {
   const [subcommand, ...rest] = args;
+
+  if (subcommand === "launch") {
+    const parsed = parseFlags(rest);
+    const [workspace] = parsed.positional;
+    if (!workspace) {
+      throw new Error("Usage: ward session launch <workspace-slug> [--task <task-id>] [--mode visible|headless] [--scenario default|fails|await-approval|tool-denied|idle-timeout]");
+    }
+    const allowedTools = listFlag(parsed.flags, "allow-tools");
+    const data = await apiRequest("/api/sessions", {
+      method: "POST",
+      body: JSON.stringify({
+        workspace_slug: workspace,
+        task_id: stringFlag(parsed.flags, "task"),
+        mode: stringFlag(parsed.flags, "mode") ?? "headless",
+        scenario: stringFlag(parsed.flags, "scenario") ?? "default",
+        goal: stringFlag(parsed.flags, "goal"),
+        constraints: listFlag(parsed.flags, "constraints"),
+        acceptance_criteria: listFlag(parsed.flags, "acceptance"),
+        source_docs: listFlag(parsed.flags, "docs"),
+        allowed_tools: allowedTools.length > 0 ? allowedTools : undefined,
+        incognito: Boolean(parsed.flags.incognito),
+        wall_clock_max_ms: numberFlag(parsed.flags, "wall-ms"),
+        idle_max_ms: numberFlag(parsed.flags, "idle-ms")
+      })
+    });
+    return { ok: true, command: "session launch", timestamp: nowIso(), message: "Harness session launched.", data };
+  }
+
+  if (subcommand === "show") {
+    const [sessionId] = rest;
+    if (!sessionId) {
+      throw new Error("Usage: ward session show <session-id>");
+    }
+    const data = await apiRequest(`/api/sessions/${encodeURIComponent(sessionId)}`);
+    return { ok: true, command: "session show", timestamp: nowIso(), message: "WARD session.", data };
+  }
+
+  if (subcommand === "cancel") {
+    const [sessionId] = rest;
+    if (!sessionId) {
+      throw new Error("Usage: ward session cancel <session-id>");
+    }
+    const data = await apiRequest(`/api/sessions/${encodeURIComponent(sessionId)}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    return { ok: true, command: "session cancel", timestamp: nowIso(), message: "WARD session canceled.", data };
+  }
+
   if (subcommand !== "simulate") {
-    throw new Error("Usage: ward session simulate <workspace-slug> [--status completed|failed] [--summary ...]");
+    throw new Error("Usage: ward session launch|show|cancel|simulate ...");
   }
   const parsed = parseFlags(rest);
   const [workspace] = parsed.positional;
@@ -943,6 +1012,25 @@ async function commandSession(args: string[]): Promise<CliResult> {
     })
   });
   return { ok: true, command: "session simulate", timestamp: nowIso(), message: "Simulated session completed.", data };
+}
+
+async function commandSessions(args: string[]): Promise<CliResult> {
+  const parsed = parseFlags(args);
+  const params = new URLSearchParams();
+  const workspace = stringFlag(parsed.flags, "workspace");
+  const state = stringFlag(parsed.flags, "state");
+  if (workspace) {
+    params.set("workspace", workspace);
+  }
+  if (state) {
+    params.set("state", state);
+  }
+  if (parsed.flags["include-incognito"]) {
+    params.set("include_incognito", "true");
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const data = await apiRequest(`/api/sessions${suffix}`);
+  return { ok: true, command: "sessions", timestamp: nowIso(), message: "WARD sessions.", data };
 }
 
 async function dispatch(args: string[]): Promise<CliResult> {
@@ -987,6 +1075,8 @@ async function dispatch(args: string[]): Promise<CliResult> {
       return commandPlan(rest);
     case "handoff":
       return commandHandoff(rest);
+    case "sessions":
+      return commandSessions(rest);
     case "session":
       return commandSession(rest);
     default:

@@ -149,6 +149,13 @@ h2 {
   margin-top: 16px;
 }
 
+.session-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.75fr) minmax(0, 1fr) minmax(280px, 1fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
 .panel {
   border: 1px solid #d6dcd6;
   border-radius: 8px;
@@ -182,7 +189,8 @@ h2 {
   gap: 8px;
 }
 
-.metrics div {
+.metrics div,
+.session-metrics div {
   border: 1px solid #e0e5e0;
   border-radius: 8px;
   padding: 10px;
@@ -190,13 +198,21 @@ h2 {
   gap: 2px;
 }
 
-.metrics strong {
+.metrics strong,
+.session-metrics strong {
   font-size: 1.25rem;
 }
 
-.metrics span {
+.metrics span,
+.session-metrics span {
   color: #657178;
   font-size: 0.78rem;
+}
+
+.session-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .row,
@@ -233,6 +249,12 @@ h2 {
   grid-template-columns: minmax(0, 1fr) 108px;
   gap: 10px;
   align-items: center;
+}
+
+.session-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .small-check {
@@ -402,6 +424,39 @@ h2 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.session-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.event-log {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.event-log div {
+  display: grid;
+  gap: 3px;
+  border-bottom: 1px solid #edf0ed;
+  padding-bottom: 8px;
+}
+
+.event-log strong {
+  color: #1b2328;
+  font-size: 0.86rem;
+}
+
+.event-log span,
+.event-log small {
+  color: #59656a;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .question-stack {
   grid-column: 1 / -1;
   display: grid;
@@ -494,12 +549,16 @@ h2 {
     .overview-grid,
     .memory-grid,
     .plan-grid,
+    .session-grid,
     .task-form,
     .row,
     .tts-grid,
     .plan-controls,
+    .session-controls,
     .start-actions,
+    .session-actions,
     .metrics,
+    .session-metrics,
     .brief-panel .actions,
     .round-rail,
     .packet-columns,

@@ -6,6 +6,7 @@ import {
   AppendWikiPageSchema,
   CreateTaskSchema,
   CreateWorkspaceSchema,
+  LaunchSessionSchema,
   OpenGateSchema,
   ProfilePatchSchema,
   AnswerPlanSchema,
@@ -20,12 +21,15 @@ import {
   createEvent,
   createTraceId,
   inferAttachmentKind,
+  type HarnessLifecycleState,
   type RuntimeHealth
 } from "@ward/core";
+import { StubHarnessAdapter, type RunningHarness } from "@ward/harness";
 import {
   acquireInstanceLock,
   addTaskArtifact,
   appendWikiPage,
+  appendHarnessEvent,
   createTask,
   createSimulatedSession,
   createWorkspace,
@@ -51,10 +55,13 @@ import {
   getWorkspaceByIdOrSlug,
   getWorkspaceDetail,
   generateTasksFromPlan,
+  getHarnessSession,
+  getHarnessSessionDetail,
   ingestAttachmentBuffer,
   ingestAttachmentFromPath,
   isPortAvailable,
   lintWiki,
+  listHarnessSessions,
   listWikiPages,
   listPreferences,
   listPlans,
@@ -64,20 +71,25 @@ import {
   openWardDatabase,
   openTaskGate,
   prewarmWarmCache,
+  prepareHarnessLaunch,
   publishPlanTasksExternal,
   readWikiPage,
   rebuildSearchIndex,
   readDeviceToken,
   readPort,
+  recoverInterruptedHarnessSessions,
   resolveTaskGate,
   resolveRepoRoot,
   resolveWardPaths,
   runMigrations,
   searchMemory,
   setPreference,
+  setHarnessWorkerPid,
   refreshWorkspaceSnapshots,
+  finalizeHarnessSession,
   revisePlan,
   startPlanMode,
+  transitionHarnessSession,
   transitionTask,
   updateProfile,
   updateWorkspace,
@@ -88,6 +100,8 @@ import {
 } from "@ward/memory";
 
 const HOST = "127.0.0.1";
+const stubHarness = new StubHarnessAdapter();
+const activeHarnesses = new Map<string, RunningHarness>();
 
 function contentType(pathname: string): string {
   switch (extname(pathname)) {
@@ -114,6 +128,92 @@ function json(data: unknown, status = 200): Response {
       "cache-control": "no-store"
     }
   });
+}
+
+function asHarnessState(value: unknown): HarnessLifecycleState | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  switch (value) {
+    case "queued":
+    case "initializing":
+    case "implementing":
+    case "testing":
+    case "creating_artifacts":
+    case "awaiting_approval":
+    case "done":
+    case "failed":
+    case "blocked":
+    case "canceled":
+      return value;
+    default:
+      return null;
+  }
+}
+
+async function consumeHarness(run: RunningHarness): Promise<void> {
+  for await (const event of run.events()) {
+    await appendHarnessEvent(run.sessionId, event);
+    if (event.event_type === "worker.status") {
+      const payload = event.payload as { state?: unknown; detail?: unknown };
+      const nextState = asHarnessState(payload.state);
+      if (nextState) {
+        const current = getHarnessSession(run.sessionId);
+        if (current.lifecycle_state !== nextState) {
+          await transitionHarnessSession(run.sessionId, nextState, typeof payload.detail === "string" ? payload.detail : undefined);
+        }
+      }
+    }
+  }
+
+  const exit = await run.closed;
+  activeHarnesses.delete(run.sessionId);
+  setHarnessWorkerPid(run.sessionId, null);
+  const current = getHarnessSession(run.sessionId);
+  if (["done", "failed", "blocked", "canceled"].includes(current.lifecycle_state ?? "")) {
+    if (current.summary) {
+      return;
+    }
+    const fallbackSummary = current.lifecycle_state === "done"
+      ? "Stub harness session completed."
+      : current.lifecycle_state === "canceled"
+        ? "Harness session canceled."
+        : current.lifecycle_state === "blocked"
+          ? "Harness session blocked."
+          : "Stub harness session failed.";
+    await finalizeHarnessSession(run.sessionId, current.lifecycle_state as "done" | "failed" | "blocked" | "canceled", fallbackSummary);
+    return;
+  }
+
+  const nextState = exit.exitCode === 0 ? "done" : "failed";
+  const summary = exit.exitCode === 0
+    ? "Stub harness session completed."
+    : `Stub harness session failed with exit code ${exit.exitCode ?? "unknown"}.`;
+  await finalizeHarnessSession(run.sessionId, nextState, summary);
+}
+
+async function launchHarnessSession(body: unknown): Promise<Awaited<ReturnType<typeof getHarnessSessionDetail>>> {
+  const prepared = await prepareHarnessLaunch(LaunchSessionSchema.parse(body));
+  const run = await stubHarness.launch(prepared.launch);
+  activeHarnesses.set(prepared.session.id, run);
+  setHarnessWorkerPid(prepared.session.id, run.pid);
+  await transitionHarnessSession(prepared.session.id, "initializing", "Stub harness spawned.");
+  void consumeHarness(run).catch(async (error) => {
+    activeHarnesses.delete(prepared.session.id);
+    setHarnessWorkerPid(prepared.session.id, null);
+    await finalizeHarnessSession(prepared.session.id, "failed", error instanceof Error ? error.message : String(error));
+  });
+  return getHarnessSessionDetail(prepared.session.id);
+}
+
+async function cancelHarnessSession(sessionId: string): Promise<Awaited<ReturnType<typeof getHarnessSessionDetail>>> {
+  const run = activeHarnesses.get(sessionId);
+  if (run) {
+    await run.cancel();
+    activeHarnesses.delete(sessionId);
+  }
+  await finalizeHarnessSession(sessionId, "canceled", "Harness session canceled by user.");
+  return getHarnessSessionDetail(sessionId);
 }
 
 async function authenticated(req: Request): Promise<boolean> {
@@ -246,8 +346,31 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
       return json({ ok: true, handoff: await getHandoff(parts[1]) });
     }
 
+    if (parts[0] === "sessions" && req.method === "GET" && !parts[1]) {
+      return json({
+        ok: true,
+        sessions: listHarnessSessions({
+          workspace: url.searchParams.get("workspace") ?? undefined,
+          state: asHarnessState(url.searchParams.get("state")) ?? undefined,
+          include_incognito: url.searchParams.get("include_incognito") === "true"
+        })
+      });
+    }
+
+    if (parts[0] === "sessions" && req.method === "POST" && !parts[1]) {
+      return json({ ok: true, detail: await launchHarnessSession(await readJson(req)) }, 201);
+    }
+
     if (parts[0] === "sessions" && parts[1] === "simulate" && req.method === "POST") {
       return json({ ok: true, ...await createSimulatedSession(SimulateSessionSchema.parse(await readJson(req))) }, 201);
+    }
+
+    if (parts[0] === "sessions" && parts[1] && req.method === "GET" && !parts[2]) {
+      return json({ ok: true, detail: await getHarnessSessionDetail(parts[1]) });
+    }
+
+    if (parts[0] === "sessions" && parts[1] && parts[2] === "cancel" && req.method === "POST") {
+      return json({ ok: true, detail: await cancelHarnessSession(parts[1]) });
     }
 
     if (parts[0] === "plan" && req.method === "GET" && !parts[1]) {
@@ -494,6 +617,7 @@ export async function startRuntime(): Promise<void> {
   await ensureMemoryBootstrap(paths);
   await rebuildSearchIndex(paths);
   await prewarmWarmCache("runtime.startup");
+  const recoveredSessions = await recoverInterruptedHarnessSessions();
   const planWatcher = await ensurePlanRuntimeWatchers();
 
   const lock = acquireInstanceLock(paths);
@@ -558,7 +682,11 @@ export async function startRuntime(): Promise<void> {
     payload: { version: WARD_VERSION, port, pid: process.pid }
   });
   logger.event(event);
-  logger.write("info", "WARD runtime started", { port, pid: process.pid });
+  logger.write("info", "WARD runtime started", {
+    port,
+    pid: process.pid,
+    recovered_sessions: recoveredSessions.length
+  });
 }
 
 if (import.meta.main) {

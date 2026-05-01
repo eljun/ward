@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@ward/core": "workspace:*",
+    "@ward/harness": "workspace:*",
     "@ward/memory": "workspace:*"
   }
 }

@@ -21,6 +21,9 @@
       "@ward/core": [
         "./packages/core/src/index.ts"
       ],
+      "@ward/harness": [
+        "./packages/harness/src/index.ts"
+      ],
       "@ward/memory": [
         "./packages/memory/src/index.ts"
       ]

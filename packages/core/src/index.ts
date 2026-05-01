@@ -6,3 +6,4 @@ export * from "./attachments/ingestors/index.ts";
 export * from "./memory/index.ts";
 export * from "./warm/index.ts";
 export * from "./plan/index.ts";
+export * from "./harness/index.ts";

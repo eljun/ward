@@ -1,6 +1,6 @@
 # Task 007: Harness Abstraction, Lifecycle, and Watchdog
 
-- Status: `planned`
+- Status: `in_progress`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `high`
@@ -17,6 +17,32 @@ handoff, agent signal capture, and per-run tool allowlist enforcement.
 This task does not wire real Codex / Claude Code yet — that lands in 008.
 The stubbed worker emits canned stream-json events so the full pipeline can
 be exercised end-to-end.
+
+## Current Slice
+
+Implemented and verified:
+
+- Shared harness launch/session schemas in `@ward/core`.
+- SQLite schema version 7 with session lifecycle fields and queue table.
+- Stub harness package that launches a Bun worker, parses stream-json, and
+  persists events/artifacts.
+- Runtime API for launch/list/show/cancel and CLI commands for the same.
+- Sessions UI surface for launching stub scenarios, viewing lifecycle state,
+  canceling active sessions, and inspecting recent events.
+- Idle watchdog that emits `watchdog.timeout`, terminates the worker, and
+  moves the session to `blocked`.
+- Allowlist enforcement for stub tool calls via `mcp.tool_denied`.
+- Runtime startup recovery that marks previously in-flight stub sessions
+  `blocked` when they cannot be reattached.
+
+Still open:
+
+- Visible PTY attach with typed input.
+- Durable queue scheduling and global/per-workspace concurrency enforcement.
+- Live SSE event streaming and backpressure/coalescing.
+- Full reattach behavior for attachable runtimes.
+- QA supervisor stub, agent manifests/signals, incognito search exclusions,
+  and session revert.
 
 ## In Scope
 
@@ -245,3 +271,57 @@ Codex, SDK, API) land in 008 by implementing the same interface.
   "best-effort, falls back to blocked on missed signal".
 - xterm.js performance with high-throughput PTY: throttle UI render at 30
   fps.
+
+## Implementation Notes
+
+### What Changed
+
+- Added the first working harness lifecycle slice: launch contract, session
+  persistence, stub worker, runtime API, CLI commands, and UI session surface.
+- Added stub scenarios for normal completion, deterministic failure,
+  approval wait, allowlist denial, and idle watchdog timeout.
+- Persisted launch allowlist, autonomy, incognito flag, and timeout metadata
+  through the session overlay so details can be reconstructed after launch.
+- Filtered harness session APIs to harness-backed rows only, so older Plan
+  Mode and handoff sessions do not get opened as if they had launch files.
+
+### Files Changed
+
+- `packages/core/src/harness/index.ts` - shared launch/session/event schemas.
+- `packages/memory/src/sessions.ts` - session file layout, DB persistence,
+  lifecycle transitions, launch reconstruction, and restart recovery.
+- `packages/memory/migrations/0007_session_lifecycle.sql` - lifecycle and
+  queue schema.
+- `packages/harness/src/index.ts` - stub adapter, stream parser, allowlist
+  enforcement, and watchdog timers.
+- `packages/harness/src/stub-worker.ts` - deterministic stub scenarios.
+- `apps/runtime/src/index.ts` - session API routes and runtime launch/cancel
+  wiring.
+- `apps/cli/src/main.ts` - session CLI commands and launch flags.
+- `apps/ui/src/main.tsx` and `apps/ui/src/styles.css` - Sessions UI.
+- `TASKS.md` - task status and verification notes.
+
+### Deviations From Plan
+
+- The implementation is intentionally sliced. Real PTY attach, durable queue
+  execution, live SSE, QA supervisor, revert, and full incognito behavior
+  remain in Task 007 scope.
+- Stub scenarios are TypeScript-defined for now rather than YAML-backed. YAML
+  scenario files can land once the state machine and queue behavior settle.
+
+### Verification Run
+
+- `bun run typecheck` - PASS.
+- `bun run build` - PASS.
+- `bun install --frozen-lockfile` - PASS after refreshing `bun.lock` for
+  the new workspace package.
+- `bun test` - SKIPPED (repository has no `*.test.ts` / `*.spec.ts` files
+  yet).
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json init` - PASS.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json up` - PASS.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session launch task-seven-smoke --task task_fa9ff5e99931425b --scenario default --goal "Run the stub harness smoke"` - PASS.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session launch task-seven-smoke --task task_fa9ff5e99931425b --scenario tool-denied --goal "Verify allowlist denial"` - PASS.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session launch task-seven-smoke --task task_fa9ff5e99931425b --scenario idle-timeout --idle-ms 100 --goal "Verify persisted idle watchdog metadata"` - PASS.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session show session_f630bfd446314399` - PASS.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json plan start task-seven-smoke --prompt "Verify sessions ignores plan rows"` - PASS.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json sessions --workspace task-seven-smoke` - PASS; Plan Mode rows are excluded from the harness session list.

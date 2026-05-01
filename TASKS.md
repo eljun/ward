@@ -2,10 +2,6 @@
 
 ## Planned
 
-- [ ] `7` Harness Abstraction, Lifecycle, and Watchdog
-  - Doc: [docs/task/007-harness-lifecycle.md](docs/task/007-harness-lifecycle.md)
-  - Goal: Visible (PTY) and headless harness modes; lifecycle state machine; worker status protocol; watchdog; allowlist enforcement; stub worker.
-
 - [ ] `8` Real Agent Adapters and Cost Ledger
   - Doc: [docs/task/008-real-agent-adapters.md](docs/task/008-real-agent-adapters.md)
   - Goal: Claude Code + Codex CLI adapters (subscription auth default); SDK / API / local opt-ins; full cost ledger with three accounting modes.
@@ -28,7 +24,10 @@
 
 ## In Progress
 
-None
+- [ ] `7` Harness Abstraction, Lifecycle, and Watchdog
+  - Doc: [docs/task/007-harness-lifecycle.md](docs/task/007-harness-lifecycle.md)
+  - Goal: Visible (PTY) and headless harness modes; lifecycle state machine; worker status protocol; watchdog; allowlist enforcement; stub worker.
+  - Current slice: harness schemas, schema version 7, stub worker package, launch/list/show/cancel API + CLI, Sessions UI surface, persisted event stream and artifacts, idle watchdog, allowlist denial, and restart recovery-to-blocked for in-flight stub sessions.
 
 ## Testing
 
@@ -102,6 +101,23 @@ None
 - `WARD_HOME=/tmp/ward-codex-task006-smoke bun run ward --json plan answer plan_f548fed7e55740b3 "Optimize safety first, then scope."`
 - runtime git watcher refreshed a temp linked repo snapshot from head `7106ed001f23f40285a19f7e6976bd8674919f02` to `3401d8079e33852786bf5b3bd0e367cf40dcecbf` after a commit and 3 s wait
 - runtime restart verified with `ward down`, `ward up`, and `ward plan status packet_2396233a8ac54f47`
+- `bun run build`
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json init`
+- fresh Task 007 init creates schema version 7 and applies `0007_session_lifecycle.sql`
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json up`
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json create-workspace "Task Seven Smoke" --description "Harness launch verification" --repo /Users/eleazarjunsan/Code/Personal/ward`
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json task create task-seven-smoke "Verify stub harness session" --type feature --priority high`
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session launch task-seven-smoke --task task_fa9ff5e99931425b --scenario default --goal "Run the stub harness smoke"`
+- stub harness session reached `done`, wrote `stub-report.md`, persisted `events.ndjson`, and recorded state transitions through initializing, implementing, testing, creating_artifacts, and done
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session show session_d1a89486a1354e29`
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json sessions --workspace task-seven-smoke`
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session launch task-seven-smoke --task task_fa9ff5e99931425b --scenario tool-denied --goal "Verify allowlist denial"`
+- tool-denied scenario emits `mcp.tool_denied` for fake `shell.exec` while preserving session completion
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session launch task-seven-smoke --task task_fa9ff5e99931425b --scenario idle-timeout --idle-ms 100 --goal "Verify persisted idle watchdog metadata"`
+- idle-timeout scenario emits `watchdog.timeout`, kills the stub worker, and moves the session to `blocked`
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json plan start task-seven-smoke --prompt "Verify sessions ignores plan rows"`
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json sessions --workspace task-seven-smoke` excludes Plan Mode rows and only returns harness-backed sessions
+- `bun run build`
 
 ## Done
 

@@ -35,6 +35,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@ward/core": "workspace:*",
+        "@ward/harness": "workspace:*",
         "@ward/memory": "workspace:*",
       },
     },
@@ -57,7 +58,15 @@
       "name": "@ward/core",
       "version": "0.0.0",
       "dependencies": {
+        "pdf-parse": "^2.4.5",
         "zod": "^4.1.13",
+      },
+    },
+    "packages/harness": {
+      "name": "@ward/harness",
+      "version": "0.0.0",
+      "dependencies": {
+        "@ward/core": "workspace:*",
       },
     },
     "packages/memory": {
@@ -266,6 +275,8 @@
     "@ward/cli": ["@ward/cli@workspace:apps/cli"],
 
     "@ward/core": ["@ward/core@workspace:packages/core"],
+
+    "@ward/harness": ["@ward/harness@workspace:packages/harness"],
 
     "@ward/memory": ["@ward/memory@workspace:packages/memory"],
 

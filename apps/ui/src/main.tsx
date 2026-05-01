@@ -231,6 +231,50 @@ type RepoSnapshot = {
   refreshed_at: string;
 };
 
+type WardEvent = {
+  event_id: string;
+  event_type: string;
+  trace_id: string;
+  timestamp: string;
+  workspace_id: number | null;
+  session_id: string | null;
+  source: string;
+  payload: unknown;
+};
+
+type HarnessSession = {
+  id: string;
+  workspace_id: number | null;
+  workspace_slug: string | null;
+  task_id: string | null;
+  task_title: string | null;
+  brain_id: string | null;
+  runtime_kind: string | null;
+  mode: string | null;
+  lifecycle_state: string | null;
+  queue_state: string | null;
+  working_dir: string | null;
+  summary: string | null;
+  incognito: boolean;
+  worker_pid: number | null;
+  trace_id: string | null;
+  scenario: string | null;
+  started_at: string;
+  ended_at: string | null;
+  updated_at: string;
+};
+
+type HarnessSessionDetail = {
+  session: HarnessSession;
+  events: WardEvent[];
+  artifacts: string[];
+  paths: {
+    session_dir: string;
+    events_path: string;
+    summary_path: string;
+  };
+};
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     cache: "no-store",
@@ -343,6 +387,10 @@ function App() {
   const [planDetail, setPlanDetail] = useState<PlanDetail | null>(null);
   const [repoSnapshots, setRepoSnapshots] = useState<RepoSnapshot[]>([]);
   const [planBusy, setPlanBusy] = useState<"" | "start" | "clear" | "answer" | "approve" | "revise" | "generate" | "refresh-context">("");
+  const [sessions, setSessions] = useState<HarnessSession[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState("");
+  const [sessionDetail, setSessionDetail] = useState<HarnessSessionDetail | null>(null);
+  const [sessionBusy, setSessionBusy] = useState<"" | "launch" | "cancel" | "refresh">("");
 
   const selectedWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.slug === selectedSlug) ?? null,
@@ -408,6 +456,32 @@ function App() {
     setRepoSnapshots(snapshotResponse.snapshots);
   }
 
+  async function readSession(sessionId: string) {
+    const response = await api<{ detail: HarnessSessionDetail }>(`/api/sessions/${encodeURIComponent(sessionId)}`);
+    setSessionDetail(response.detail);
+    setSelectedSessionId(response.detail.session.id);
+  }
+
+  async function refreshSessionSurface(slug = selectedSlug, preferredSessionId = selectedSessionId) {
+    if (!slug) {
+      setSessions([]);
+      setSelectedSessionId("");
+      setSessionDetail(null);
+      return;
+    }
+    const response = await api<{ sessions: HarnessSession[] }>(`/api/sessions?workspace=${encodeURIComponent(slug)}`);
+    setSessions(response.sessions);
+    const nextSessionId = response.sessions.some((session) => session.id === preferredSessionId)
+      ? preferredSessionId
+      : response.sessions[0]?.id ?? "";
+    setSelectedSessionId(nextSessionId);
+    if (nextSessionId) {
+      await readSession(nextSessionId);
+    } else {
+      setSessionDetail(null);
+    }
+  }
+
   async function readMemoryPage(scope: string, page: string) {
     const response = await api<{ page: WikiPage }>(`/api/wiki/${scopePath(scope)}/${encodePathSegments(page)}`);
     setSelectedPage(response.page.page);
@@ -448,6 +522,7 @@ function App() {
   useEffect(() => {
     refreshDetail(selectedSlug).catch((err) => setError(err.message));
     refreshPlanSurface(selectedSlug).catch((err) => setError(err.message));
+    refreshSessionSurface(selectedSlug).catch((err) => setError(err.message));
   }, [selectedSlug]);
 
   useEffect(() => {
@@ -713,6 +788,55 @@ function App() {
     }
   }
 
+  async function launchSession(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedWorkspace) {
+      return;
+    }
+    setSessionBusy("launch");
+    const form = new FormData(event.currentTarget);
+    const taskId = String(form.get("task_id") ?? "");
+    const scenario = String(form.get("scenario") ?? "default");
+    try {
+      const response = await api<{ detail: HarnessSessionDetail }>("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({
+          workspace_slug: selectedWorkspace.slug,
+          task_id: taskId || undefined,
+          mode: String(form.get("mode") ?? "headless"),
+          scenario,
+          goal: String(form.get("goal") ?? "") || undefined,
+          idle_max_ms: scenario === "idle-timeout" ? 200 : undefined
+        })
+      });
+      const nextId = response.detail.session.id;
+      setSelectedSessionId(nextId);
+      setSessionDetail(response.detail);
+      setMessage("Harness session launched.");
+      await refreshSessionSurface(selectedWorkspace.slug, nextId);
+    } finally {
+      setSessionBusy("");
+    }
+  }
+
+  async function cancelSession() {
+    if (!sessionDetail) {
+      return;
+    }
+    setSessionBusy("cancel");
+    try {
+      const response = await api<{ detail: HarnessSessionDetail }>(`/api/sessions/${encodeURIComponent(sessionDetail.session.id)}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      setSessionDetail(response.detail);
+      setMessage("Harness session canceled.");
+      await refreshSessionSurface(selectedSlug, response.detail.session.id);
+    } finally {
+      setSessionBusy("");
+    }
+  }
+
   async function saveWikiPage() {
     if (!selectedPage) {
       return;
@@ -759,7 +883,7 @@ function App() {
           <p className="eyebrow">WARD</p>
           <h1>Command Center</h1>
         </div>
-        <button type="button" onClick={() => refresh().then(() => refreshPlanSurface()).catch((err) => setError(err.message))}>
+        <button type="button" onClick={() => refresh().then(() => Promise.all([refreshPlanSurface(), refreshSessionSurface()])).catch((err) => setError(err.message))}>
           Refresh
         </button>
       </header>
@@ -1127,6 +1251,102 @@ function App() {
                 <strong>{output.participant_id}</strong>
                 <span>{participantMeta(output)}</span>
                 <small>{participantSummary(output)}</small>
+              </div>
+            ))}
+          </div>
+        </section>
+      </section>
+
+      <section className="session-grid">
+        <section className="panel session-sidebar">
+          <div className="panel-title">
+            <h2>Sessions</h2>
+            <span>{sessions.length}</span>
+          </div>
+          <form className="stack" onSubmit={(event) => launchSession(event).catch((err) => setError(err.message))}>
+            <input name="goal" placeholder="Session goal" disabled={!selectedWorkspace} />
+            <select name="task_id" disabled={!selectedWorkspace}>
+              <option value="">No task</option>
+              {detail?.tasks.map((task) => (
+                <option key={task.id} value={task.id}>{task.title}</option>
+              ))}
+            </select>
+            <div className="session-controls">
+              <select name="mode" defaultValue="headless" disabled={!selectedWorkspace}>
+                <option value="headless">Headless</option>
+                <option value="visible">Visible</option>
+              </select>
+              <select name="scenario" defaultValue="default" disabled={!selectedWorkspace}>
+                <option value="default">Default</option>
+                <option value="fails">Fails</option>
+                <option value="await-approval">Approval</option>
+                <option value="tool-denied">Tool Denied</option>
+                <option value="idle-timeout">Idle Watchdog</option>
+              </select>
+            </div>
+            <button type="submit" disabled={!selectedWorkspace || sessionBusy !== ""}>
+              {sessionBusy === "launch" ? "Launching..." : "Launch Stub"}
+            </button>
+          </form>
+          <div className="list compact">
+            {sessions.map((session) => (
+              <button
+                className={session.id === selectedSessionId ? "item active" : "item"}
+                key={session.id}
+                type="button"
+                onClick={() => readSession(session.id).catch((err) => setError(err.message))}
+              >
+                <strong>{session.task_title ?? session.brain_id ?? session.id}</strong>
+                <span>{session.lifecycle_state ?? "new"} · {session.mode ?? "mode"}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel session-detail">
+          <div className="panel-title">
+            <h2>{sessionDetail?.session.task_title ?? "Session Detail"}</h2>
+            <span>{sessionDetail?.session.lifecycle_state ?? "idle"}</span>
+          </div>
+          <div className="session-metrics">
+            <div>
+              <strong>{sessionDetail?.events.length ?? 0}</strong>
+              <span>events</span>
+            </div>
+            <div>
+              <strong>{sessionDetail?.artifacts.length ?? 0}</strong>
+              <span>artifacts</span>
+            </div>
+            <div>
+              <strong>{sessionDetail?.session.worker_pid ?? "-"}</strong>
+              <span>worker</span>
+            </div>
+          </div>
+          <div className="moderator">
+            <strong>{sessionDetail?.session.summary ?? sessionDetail?.session.brain_id ?? "No active session"}</strong>
+            <p>{sessionDetail?.session.working_dir ?? (selectedWorkspace ? "Launch a stub session for this workspace." : "Select a workspace first.")}</p>
+          </div>
+          <div className="session-actions">
+            <button type="button" disabled={!sessionDetail || sessionBusy !== ""} onClick={() => refreshSessionSurface(selectedSlug, selectedSessionId).catch((err) => setError(err.message))}>
+              {sessionBusy === "refresh" ? "Refreshing..." : "Refresh"}
+            </button>
+            <button type="button" disabled={!sessionDetail || ["done", "failed", "blocked", "canceled"].includes(sessionDetail.session.lifecycle_state ?? "") || sessionBusy !== ""} onClick={() => cancelSession().catch((err) => setError(err.message))}>
+              {sessionBusy === "cancel" ? "Canceling..." : "Cancel"}
+            </button>
+          </div>
+        </section>
+
+        <section className="panel session-events">
+          <div className="panel-title">
+            <h2>Event Log</h2>
+            <span>{sessionDetail?.events.length ?? 0}</span>
+          </div>
+          <div className="event-log">
+            {sessionDetail?.events.slice(-12).map((event) => (
+              <div key={event.event_id}>
+                <strong>{event.event_type}</strong>
+                <span>{event.source} · {new Date(event.timestamp).toLocaleTimeString()}</span>
+                <small>{JSON.stringify(event.payload)}</small>
               </div>
             ))}
           </div>
