@@ -2,10 +2,6 @@
 
 ## Planned
 
-- [ ] `8` Real Agent Adapters and Cost Ledger
-  - Doc: [docs/task/008-real-agent-adapters.md](docs/task/008-real-agent-adapters.md)
-  - Goal: Claude Code + Codex CLI adapters (subscription auth default); SDK / API / local opt-ins; full cost ledger with three accounting modes.
-
 - [ ] `9` MCP Connections Layer
   - Doc: [docs/task/009-mcp-connections.md](docs/task/009-mcp-connections.md)
   - Goal: Three-scope MCP registry (global / workspace / repo, reuses `.mcp.json`); secrets via OS keychain; tool routing; autonomy-class policy; WARD-as-MCP-server.
@@ -24,7 +20,10 @@
 
 ## In Progress
 
-- None.
+- [ ] `8` Real Agent Adapters and Cost Ledger
+  - Doc: [docs/task/008-real-agent-adapters.md](docs/task/008-real-agent-adapters.md)
+  - Goal: Claude Code + Codex CLI adapters (subscription auth default); SDK / API / local opt-ins; full cost ledger with three accounting modes.
+  - Current slice: brain registry defaults, cost/quota ledger schema, repository APIs, and CLI/API read surfaces.
 
 ## Testing
 
@@ -123,6 +122,28 @@
 - `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session launch task-seven-smoke --scenario throughput` persisted 1,200 `worker.message` events and finished `done`.
 - Runtime restart recovery verified with `long-running`: interrupted session `session_9fb05273870b4609` recovered as `blocked` with summary, and queued session `session_e69a9b4137214598` dequeued and finished after `ward up`.
 - `bun run build`
+- `bun install --frozen-lockfile`
+- `bun run typecheck`
+- `bun run build`
+- `git diff --check`
+- `bun test` reports no test files in the repo yet
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json init`
+- fresh Task 008 init reports schema version 8 and creates the brain registry defaults plus `brains.yaml`
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json brain list`
+- brain registry lists `claude-code-cli`, `codex-cli`, `stub-worker`, and disabled `local-openai-compatible` defaults
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json create-workspace "Task Eight Smoke" --description "Brain ledger smoke" --repo /Users/eleazarjunsan/Code/Personal/ward`
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json task create task-eight-smoke "Verify cost ledger" --type feature --priority high`
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json session launch task-eight-smoke --task task_8ed498d9e06d482f --scenario default --goal "Verify cost ledger records stub harness invocation"`
+- Task 008 stub harness session reached `done` and recorded one local `stub-worker` cost ledger entry.
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json cost today`
+- cost summary reports 1 invocation, 308 ms duration, 0 tokens, and 0 dollars for `stub-worker`
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json quota list --limit 10`
+- quota ledger reports `brain.stub-worker.daily_invocations` and `brain.stub-worker.daily_duration_ms`
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json cost forecast`
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json brain disable local-openai-compatible`
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json brain enable local-openai-compatible`
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json brain route recap_and_brief stub-worker`
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json doctor`
 
 ## Done
 

@@ -23,7 +23,8 @@ import {
   rotateDeviceToken,
   runMigrations,
   checkMemoryGit,
-  warmCacheStats
+  warmCacheStats,
+  ensureBrainRegistry
 } from "@ward/memory";
 import { openWardDatabase } from "@ward/memory";
 
@@ -210,6 +211,7 @@ async function commandInit(): Promise<CliResult> {
   await ensureDeviceToken(paths);
   const migrations = await runMigrations(paths, { repoRoot });
   await ensureMemoryBootstrap(paths);
+  await ensureBrainRegistry(paths);
   await rebuildSearchIndex(paths);
   const warm = await prewarmWarmCache("cli.init");
   return {
@@ -829,6 +831,61 @@ async function commandWarm(args: string[]): Promise<CliResult> {
   return { ok: true, command: "warm", timestamp: nowIso(), message: "WARD warm cache refreshed.", data };
 }
 
+async function commandBrain(args: string[]): Promise<CliResult> {
+  const [subcommand = "list", ...rest] = args;
+  if (subcommand === "list") {
+    const data = await apiRequest("/api/brains");
+    return { ok: true, command: "brain list", timestamp: nowIso(), message: "WARD brains.", data };
+  }
+  if (subcommand === "enable" || subcommand === "disable") {
+    const [brainId] = rest;
+    if (!brainId) {
+      throw new Error(`Usage: ward brain ${subcommand} <brain-id>`);
+    }
+    const data = await apiRequest(`/api/brains/${encodeURIComponent(brainId)}/${subcommand}`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    return { ok: true, command: `brain ${subcommand}`, timestamp: nowIso(), message: `WARD brain ${subcommand}d.`, data };
+  }
+  if (subcommand === "route") {
+    const [concern, ...brainIds] = rest;
+    if (!concern || brainIds.length === 0) {
+      throw new Error("Usage: ward brain route <concern> <brain-id> [brain-id...]");
+    }
+    const data = await apiRequest(`/api/brains/routes/${encodeURIComponent(concern)}`, {
+      method: "PUT",
+      body: JSON.stringify({ brain_ids: brainIds })
+    });
+    return { ok: true, command: "brain route", timestamp: nowIso(), message: "WARD brain route updated.", data };
+  }
+  throw new Error("Usage: ward brain list|enable|disable|route");
+}
+
+async function commandCost(args: string[]): Promise<CliResult> {
+  const [subcommand = "today"] = args;
+  if (subcommand === "today") {
+    const data = await apiRequest("/api/cost/today");
+    return { ok: true, command: "cost today", timestamp: nowIso(), message: "WARD cost ledger today.", data };
+  }
+  if (subcommand === "forecast") {
+    const data = await apiRequest("/api/cost/forecast");
+    return { ok: true, command: "cost forecast", timestamp: nowIso(), message: "WARD cost forecast.", data };
+  }
+  throw new Error("Usage: ward cost today|forecast");
+}
+
+async function commandQuota(args: string[]): Promise<CliResult> {
+  const [subcommand = "list", ...rest] = args;
+  if (subcommand === "list") {
+    const parsed = parseFlags(rest);
+    const limit = numberFlag(parsed.flags, "limit") ?? 50;
+    const data = await apiRequest(`/api/quota?limit=${encodeURIComponent(String(limit))}`);
+    return { ok: true, command: "quota list", timestamp: nowIso(), message: "WARD quota ledger.", data };
+  }
+  throw new Error("Usage: ward quota list [--limit <n>]");
+}
+
 async function commandPlan(args: string[]): Promise<CliResult> {
   const [subcommand = "list", ...rest] = args;
 
@@ -1198,6 +1255,12 @@ async function dispatch(args: string[]): Promise<CliResult> {
       return commandBrief(rest);
     case "warm":
       return commandWarm(rest);
+    case "brain":
+      return commandBrain(rest);
+    case "cost":
+      return commandCost(rest);
+    case "quota":
+      return commandQuota(rest);
     case "plan":
       return commandPlan(rest);
     case "handoff":

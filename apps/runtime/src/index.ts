@@ -39,6 +39,7 @@ import {
   answerPlan,
   approvePlan,
   ensureDeviceToken,
+  ensureBrainRegistry,
   ensureMemoryBootstrap,
   ensureWardLayout,
   ensurePlanRuntimeWatchers,
@@ -55,6 +56,10 @@ import {
   getWorkspaceByIdOrSlug,
   getWorkspaceDetail,
   generateTasksFromPlan,
+  getBrain,
+  getBrainRegistry,
+  getCostForecast,
+  getCostLedgerToday,
   claimReadyHarnessSessions,
   getHarnessSession,
   getHarnessSessionDetail,
@@ -64,6 +69,7 @@ import {
   lintWiki,
   listHarnessQueue,
   listHarnessSessions,
+  listQuotaLedger,
   listWikiPages,
   listPreferences,
   listPlans,
@@ -89,10 +95,13 @@ import {
   setHarnessWorkerPid,
   markHarnessQueueTerminal,
   refreshWorkspaceSnapshots,
+  recordCostLedgerEntry,
   finalizeHarnessSession,
   revertHarnessSession,
   revisePlan,
   startPlanMode,
+  setBrainEnabled,
+  setBrainRoute,
   transitionHarnessSession,
   transitionTask,
   updateProfile,
@@ -159,6 +168,29 @@ function asHarnessState(value: unknown): HarnessLifecycleState | null {
   }
 }
 
+function sessionDurationMs(startedAt: string, endedAt: string | null): number {
+  if (!endedAt) {
+    return 0;
+  }
+  return Math.max(0, new Date(endedAt).getTime() - new Date(startedAt).getTime());
+}
+
+function recordHarnessCost(sessionId: string): void {
+  const session = getHarnessSession(sessionId);
+  const brainId = session.brain_id ?? "stub-worker";
+  const brain = getBrain(brainId);
+  recordCostLedgerEntry({
+    brain_id: brainId,
+    accounting_mode: brain?.accounting ?? "local",
+    trigger: "harness",
+    workspace_id: session.workspace_id,
+    session_id: session.id,
+    trace_id: session.trace_id ?? createTraceId("cost"),
+    duration_ms: sessionDurationMs(session.started_at, session.ended_at),
+    invocations: 1
+  });
+}
+
 async function consumeHarness(run: RunningHarness): Promise<void> {
   for await (const event of run.events()) {
     await publishHarnessEvent(run.sessionId, event);
@@ -190,6 +222,7 @@ async function consumeHarness(run: RunningHarness): Promise<void> {
           ? "Harness session blocked."
           : "Stub harness session failed.";
     await finalizeHarnessSession(run.sessionId, current.lifecycle_state as "done" | "failed" | "blocked" | "canceled", fallbackSummary);
+    recordHarnessCost(run.sessionId);
     void drainHarnessQueue();
     return;
   }
@@ -199,6 +232,7 @@ async function consumeHarness(run: RunningHarness): Promise<void> {
     ? "Stub harness session completed."
     : `Stub harness session failed with exit code ${exit.exitCode ?? "unknown"}.`;
   await finalizeHarnessSession(run.sessionId, nextState, summary);
+  recordHarnessCost(run.sessionId);
   void drainHarnessQueue();
 }
 
@@ -460,6 +494,32 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
     if (parts[0] === "preferences" && req.method === "PATCH" && parts[1] && parts[2]) {
       const body = await readJson(req) as { value?: unknown; workspace_id?: number };
       return json({ ok: true, preference: setPreference(parts[1] as "global" | "workspace" | "repo", parts[2], body.value, body.workspace_id) });
+    }
+
+    if (parts[0] === "brains" && req.method === "GET" && !parts[1]) {
+      return json({ ok: true, registry: getBrainRegistry() });
+    }
+
+    if (parts[0] === "brains" && parts[1] && (parts[2] === "enable" || parts[2] === "disable") && req.method === "POST") {
+      return json({ ok: true, brain: setBrainEnabled(parts[1], parts[2] === "enable") });
+    }
+
+    if (parts[0] === "brains" && parts[1] === "routes" && parts[2] && req.method === "PUT") {
+      const body = await readJson(req) as { brain_ids?: unknown };
+      const brainIds = Array.isArray(body.brain_ids) ? body.brain_ids.map(String) : [];
+      return json({ ok: true, route: setBrainRoute(parts[2], brainIds) });
+    }
+
+    if (parts[0] === "cost" && parts[1] === "today" && req.method === "GET") {
+      return json({ ok: true, summary: getCostLedgerToday(url.searchParams.get("date") ?? undefined) });
+    }
+
+    if (parts[0] === "cost" && parts[1] === "forecast" && req.method === "GET") {
+      return json({ ok: true, forecast: getCostForecast() });
+    }
+
+    if (parts[0] === "quota" && req.method === "GET") {
+      return json({ ok: true, ledger: listQuotaLedger(Number(url.searchParams.get("limit") ?? "50")) });
     }
 
     if (parts[0] === "overview" && req.method === "GET") {
@@ -786,6 +846,7 @@ export async function startRuntime(): Promise<void> {
   await ensureDeviceToken(paths);
   await runMigrations(paths, { repoRoot });
   await ensureMemoryBootstrap(paths);
+  await ensureBrainRegistry(paths);
   await rebuildSearchIndex(paths);
   await prewarmWarmCache("runtime.startup");
   const recoveredSessions = await recoverInterruptedHarnessSessions();

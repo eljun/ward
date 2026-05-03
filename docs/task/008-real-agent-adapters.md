@@ -1,6 +1,6 @@
 # Task 008: Real Agent Adapters and Cost Ledger
 
-- Status: `planned`
+- Status: `in_progress`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `high`
@@ -191,3 +191,59 @@ compact signals and hard-memory artifacts.
   enforced; queue waits when at cap.
 - API costs during development: kept disabled by default; CLI adapters are
   the safe path.
+
+## Implementation Notes
+
+### What Changed
+
+- Added the first Task 008 foundation slice: default Brain Registry records,
+  brain routes, cost ledger entries, quota ledger rows, and read/update
+  surfaces through CLI and runtime API.
+- Seeded `~/.ward/brains.yaml` on init/runtime start for user-visible default
+  routing configuration.
+- Connected completed harness sessions to the cost ledger so the existing
+  `stub-worker` records local invocations and duration before real adapters
+  are swapped in.
+
+### Files Changed
+
+- `packages/core/src/brains/index.ts` - Brain Registry, cost ledger, quota
+  ledger, and forecast schemas.
+- `packages/core/src/index.ts` - Exports the new brain/cost/quota contracts.
+- `packages/memory/migrations/0008_cost_ledger.sql` - Adds brain registry,
+  route, cost ledger, and quota ledger tables.
+- `packages/memory/src/brains.ts` - Seeds defaults and exposes registry,
+  routing, cost, quota, and forecast repository functions.
+- `packages/memory/src/index.ts` - Exports the new memory repository.
+- `apps/cli/src/main.ts` - Adds `ward brain`, `ward cost`, and `ward quota`
+  commands and seeds the registry during `ward init`.
+- `apps/runtime/src/index.ts` - Adds brain/cost/quota API routes, seeds the
+  registry at runtime startup, and records harness cost on terminal sessions.
+- `TASKS.md` - Moves Task 008 into `In Progress` with the current slice noted.
+
+### Deviations From Plan
+
+- This is an intentional first slice of Task 008. Real Claude Code, Codex,
+  SDK/API, local adapter execution, caps, hot reload, and UI dashboards remain
+  for subsequent slices.
+
+### Verification Run
+
+- `bun install --frozen-lockfile` - PASS
+- `bun run typecheck` - PASS
+- `bun run build` - PASS
+- `git diff --check` - PASS
+- `bun test` - FAIL (no test files exist in the repo yet)
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json init` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json brain list` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json create-workspace "Task Eight Smoke" --description "Brain ledger smoke" --repo /Users/eleazarjunsan/Code/Personal/ward` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json task create task-eight-smoke "Verify cost ledger" --type feature --priority high` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json session launch task-eight-smoke --task task_8ed498d9e06d482f --scenario default --goal "Verify cost ledger records stub harness invocation"` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json session show session_e1f7b53e30154b77` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json cost today` - PASS (1 local `stub-worker` invocation, 308 ms)
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json quota list --limit 10` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json cost forecast` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json brain disable local-openai-compatible` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json brain enable local-openai-compatible` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json brain route recap_and_brief stub-worker` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json doctor` - PASS
