@@ -20,6 +20,10 @@
 
 ## In Progress
 
+- [ ] `8A` Command Center Navigation Layout
+  - Doc: [docs/task/008a-command-center-navigation.md](docs/task/008a-command-center-navigation.md)
+  - Goal: Centered WARD command-orb home with Sessions drawer, settings/menu drawer, Three.js orb, and Tailwind/shadcn-style UI primitives.
+
 - [ ] `8` Real Agent Adapters and Cost Ledger
   - Doc: [docs/task/008-real-agent-adapters.md](docs/task/008-real-agent-adapters.md)
   - Goal: Claude Code + Codex CLI adapters (subscription auth default); SDK / API / local opt-ins; full cost ledger with three accounting modes.
@@ -158,6 +162,8 @@
 - cost summary records subscription invocations and duration for `claude-code-cli` and `codex-cli`.
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json quota list --limit 10`
 - Task 008 session UI shows readable brain choices, state pills, a selected-brain status strip, latest-message summaries, and concise event log payloads for adapter smoke tests.
+- Task 008A Command Center orb shell exposes Sessions via the top-left drawer and supporting surfaces through the top-right command menu while preserving existing controls.
+- Task 008A runtime-served UI root returns 200 and serves the orb/glassy Vite bundle.
 
 ## Done
 

@@ -1,5 +1,9 @@
 import React, { FormEvent, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { Boxes, BrainCircuit, Database, LayoutDashboard, Menu, Mic, PanelRight, RefreshCw, Send, Settings, Sparkles, Waypoints, X } from "lucide-react";
+import { WardOrb } from "./components/WardOrb";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
 import "./styles.css";
 
 type Profile = {
@@ -289,6 +293,8 @@ type BrainRegistry = {
   brains: BrainConfig[];
 };
 
+type CommandView = "overview" | "workspaces" | "planning" | "sessions" | "memory" | "settings";
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     cache: "no-store",
@@ -430,6 +436,23 @@ function stateTone(state: string | null | undefined): string {
 
 function stateLabel(state: string | null | undefined): string {
   return state ? titleCase(state) : "Idle";
+}
+
+function stateBadgeTone(state: string | null | undefined): React.ComponentProps<typeof Badge>["tone"] {
+  const tone = stateTone(state);
+  if (tone === "done") {
+    return "success";
+  }
+  if (tone === "blocked") {
+    return "warning";
+  }
+  if (tone === "failed") {
+    return "danger";
+  }
+  if (tone === "running") {
+    return "active";
+  }
+  return "default";
 }
 
 function eventSummary(event: WardEvent): string {
@@ -605,6 +628,12 @@ function App() {
   const [sessionBusy, setSessionBusy] = useState<"" | "launch" | "cancel" | "refresh">("");
   const [terminalInput, setTerminalInput] = useState("");
   const [brainRegistry, setBrainRegistry] = useState<BrainRegistry>({ brains: [] });
+  const [activeView, setActiveView] = useState<CommandView>("overview");
+  const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [commandMenuOpen, setCommandMenuOpen] = useState(false);
+  const [orbPulse, setOrbPulse] = useState(0);
+  const [chatText, setChatText] = useState("");
 
   const selectedWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.slug === selectedSlug) ?? null,
@@ -1204,28 +1233,131 @@ function App() {
     setMessage("Warm cache refreshed.");
   }
 
+  function openCommandPanel(view: CommandView) {
+    setActiveView(view);
+    setRightPanelOpen(true);
+    setSessionsOpen(false);
+    setCommandMenuOpen(false);
+  }
+
+  function pulseOrb() {
+    setOrbPulse((value) => value + 1);
+  }
+
+  function submitOrbChat(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const text = chatText.trim();
+    if (!text) {
+      return;
+    }
+    pulseOrb();
+    setMessage(`WARD heard: ${text}`);
+    setChatText("");
+  }
+
   const planRounds: PlanRoundName[] = ["context", "proposal", "critique", "convergence", "decision"];
   const latestRound = planDetail?.rounds[planDetail.rounds.length - 1] ?? null;
   const latestSnapshot = repoSnapshots[0] ?? null;
   const planIsDraft = planDetail?.packet?.status === "draft";
   const planIsApproved = planDetail?.packet?.status === "approved";
+  const commandTabs: Array<{ id: CommandView; label: string; meta: string; icon: React.ComponentType<{ className?: string }> }> = [
+    { id: "overview", label: "Overview", meta: overview?.brief.local_date ?? "warm", icon: LayoutDashboard },
+    { id: "workspaces", label: "Workspaces", meta: String(workspaces.length), icon: Boxes },
+    { id: "planning", label: "Planning", meta: String(plans.length), icon: Waypoints },
+    { id: "sessions", label: "Sessions", meta: String(sessions.length), icon: BrainCircuit },
+    { id: "memory", label: "Memory", meta: String(wikiPages.length), icon: Database },
+    { id: "settings", label: "Settings", meta: profile?.display_name ?? "profile", icon: Settings }
+  ];
+  const activeCommand = commandTabs.find((tab) => tab.id === activeView) ?? commandTabs[0];
 
   return (
-    <main className="shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">WARD</p>
-          <h1>Command Center</h1>
+    <main className="orb-shell">
+      <div className="orb-background" aria-hidden="true" />
+      <header className="orb-topbar">
+        <Button className="orb-icon-button" size="icon" type="button" variant="secondary" onClick={() => {
+          if (activeView === "sessions" && sessionsOpen) {
+            setSessionsOpen(false);
+            return;
+          }
+          setActiveView("sessions");
+          setSessionsOpen(true);
+          setRightPanelOpen(false);
+          setCommandMenuOpen(false);
+        }} aria-label="Toggle sessions">
+          {sessionsOpen ? <X className="size-4" /> : <Menu className="size-4" />}
+        </Button>
+        <div className="orb-brand">
+          <p><Sparkles className="size-3.5" /> WARD</p>
         </div>
-        <button type="button" onClick={() => refresh().then(() => Promise.all([refreshPlanSurface(), refreshSessionSurface()])).catch((err) => setError(err.message))}>
-          Refresh
-        </button>
+        <div className="orb-menu-wrap">
+          <Button className="orb-icon-button" size="icon" type="button" variant="secondary" onClick={() => setCommandMenuOpen((value) => !value)} aria-label="Open command menu">
+            <Settings className="size-4" />
+          </Button>
+          {commandMenuOpen ? (
+            <div className="command-menu">
+              {commandTabs.filter((tab) => tab.id !== "sessions").map((tab) => {
+                const Icon = tab.icon;
+                return (
+                  <button key={tab.id} type="button" onClick={() => openCommandPanel(tab.id)}>
+                    <Icon className="size-4" />
+                    <span>{tab.label}</span>
+                    <small>{tab.meta}</small>
+                  </button>
+                );
+              })}
+              <button type="button" onClick={() => refresh().then(() => Promise.all([refreshPlanSurface(), refreshSessionSurface()])).catch((err) => setError(err.message))}>
+                <RefreshCw className="size-4" />
+                <span>Refresh</span>
+                <small>sync</small>
+              </button>
+            </div>
+          ) : null}
+        </div>
       </header>
 
       {error && <p className="banner error">{error}</p>}
       {message && <p className="banner">{message}</p>}
 
-      <section className="overview-grid">
+      <section className="orb-stage">
+        <div className="orb-title">
+          <h5>WARD</h5>
+          <p>{overview?.brief.narration ?? "WARD is preparing your brief."}</p>
+        </div>
+        <WardOrb pulseKey={orbPulse} />
+        <form className="orb-dock" onSubmit={submitOrbChat}>
+          <Button className="speak-cta" type="button" onClick={() => {
+            pulseOrb();
+            overview && speak(overview.brief.narration, overview.profile);
+          }}>
+            <Mic className="size-5" />
+            Speak
+          </Button>
+          <input value={chatText} onChange={(event) => setChatText(event.target.value)} placeholder="Ask WARD..." />
+          <Button size="icon" type="submit" aria-label="Send to WARD">
+            <Send className="size-4" />
+          </Button>
+        </form>
+      </section>
+
+      {rightPanelOpen || sessionsOpen ? (
+        <aside className={`surface-drawer ${activeView === "sessions" ? "left" : "right"}`}>
+          <div className="drawer-title">
+            <div>
+              <span>{activeView === "sessions" ? "Live runs" : activeCommand.meta}</span>
+              <h2>{activeCommand.label}</h2>
+            </div>
+            <Button size="icon" type="button" variant="ghost" onClick={() => {
+              if (activeView === "sessions") {
+                setSessionsOpen(false);
+              } else {
+                setRightPanelOpen(false);
+              }
+            }} aria-label="Close panel">
+              <X className="size-4" />
+            </Button>
+          </div>
+
+      {activeView === "overview" ? <section className="overview-grid">
         <section className="panel brief-panel">
           <div className="panel-title">
             <h2>{overview?.brief.greeting ?? "Overview"}</h2>
@@ -1292,9 +1424,9 @@ function App() {
             ))}
           </div>
         </section>
-      </section>
+      </section> : null}
 
-      <section className="grid">
+      {activeView === "settings" ? <section className="settings-grid">
         <form className="panel" key={profile ? `${profile.display_name}-${profile.tts_voice ?? ""}-${voices.length}` : "profile-loading"} onSubmit={saveProfile}>
           <div className="panel-title">
             <h2>Profile</h2>
@@ -1352,7 +1484,9 @@ function App() {
           </div>
           <button type="submit">Save</button>
         </form>
+      </section> : null}
 
+      {activeView === "workspaces" ? <section className="workspace-grid">
         <section className="panel">
           <div className="panel-title">
             <h2>Workspaces</h2>
@@ -1378,9 +1512,7 @@ function App() {
             ))}
           </div>
         </section>
-      </section>
 
-      <section className="grid detail-grid">
         <section className="panel">
           <div className="panel-title">
             <h2>Tasks</h2>
@@ -1432,9 +1564,9 @@ function App() {
             ))}
           </div>
         </section>
-      </section>
+      </section> : null}
 
-      <section className="plan-grid">
+      {activeView === "planning" ? <section className="plan-grid">
         <section className="panel plan-sidebar">
           <div className="panel-title">
             <h2>Plan Mode</h2>
@@ -1589,9 +1721,9 @@ function App() {
             ))}
           </div>
         </section>
-      </section>
+      </section> : null}
 
-      <section className="session-grid">
+      {activeView === "sessions" ? <section className="session-grid">
         <section className="panel session-sidebar">
           <div className="panel-title">
             <h2>Sessions</h2>
@@ -1653,7 +1785,7 @@ function App() {
               >
                 <div className="session-row">
                   <strong>{session.task_title ?? session.brain_id ?? session.id}</strong>
-                  <span className={`state-pill ${stateTone(session.lifecycle_state)}`}>{stateLabel(session.lifecycle_state)}</span>
+                  <Badge tone={stateBadgeTone(session.lifecycle_state)}>{stateLabel(session.lifecycle_state)}</Badge>
                 </div>
                 <span>{session.brain_id ?? "brain pending"} · {runtimeLabel(session.runtime_kind)} · {session.mode ?? "headless"}</span>
                 <small>{session.queue_state ?? "queue"}{session.queue_position ? ` #${session.queue_position}` : ""}</small>
@@ -1665,7 +1797,7 @@ function App() {
         <section className="panel session-detail">
           <div className="panel-title">
             <h2>{sessionDetail?.session.task_title ?? "Session Detail"}</h2>
-            <span className={`state-pill ${stateTone(sessionDetail?.session.lifecycle_state)}`}>{stateLabel(sessionDetail?.session.lifecycle_state)}</span>
+            <Badge tone={stateBadgeTone(sessionDetail?.session.lifecycle_state)}>{stateLabel(sessionDetail?.session.lifecycle_state)}</Badge>
           </div>
           <div className="session-metrics">
             <div>
@@ -1755,9 +1887,9 @@ function App() {
             ))}
           </div>
         </section>
-      </section>
+      </section> : null}
 
-      <section className="memory-grid">
+      {activeView === "memory" ? <section className="memory-grid">
         <section className="panel memory-tree">
           <div className="panel-title">
             <h2>Memory</h2>
@@ -1845,7 +1977,9 @@ function App() {
             ))}
           </div>
         </section>
-      </section>
+      </section> : null}
+        </aside>
+      ) : null}
     </main>
   );
 }
