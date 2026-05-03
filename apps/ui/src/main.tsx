@@ -295,6 +295,22 @@ type BrainRegistry = {
 
 type CommandView = "overview" | "workspaces" | "planning" | "sessions" | "memory" | "settings";
 
+type OrbChatResponse = {
+  message: string;
+  reply: string;
+  surface: CommandView;
+  suggestions: string[];
+  trace_id: string;
+  timestamp: string;
+};
+
+type OrbChatTurn = {
+  id: string;
+  role: "user" | "ward";
+  text: string;
+  timestamp: string;
+};
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     cache: "no-store",
@@ -634,6 +650,8 @@ function App() {
   const [commandMenuOpen, setCommandMenuOpen] = useState(false);
   const [orbPulse, setOrbPulse] = useState(0);
   const [chatText, setChatText] = useState("");
+  const [orbBusy, setOrbBusy] = useState(false);
+  const [orbTurns, setOrbTurns] = useState<OrbChatTurn[]>([]);
 
   const selectedWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.slug === selectedSlug) ?? null,
@@ -1244,15 +1262,46 @@ function App() {
     setOrbPulse((value) => value + 1);
   }
 
-  function submitOrbChat(event: FormEvent<HTMLFormElement>) {
+  async function submitOrbChat(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = chatText.trim();
     if (!text) {
       return;
     }
+    const timestamp = new Date().toISOString();
     pulseOrb();
-    setMessage(`WARD heard: ${text}`);
+    setOrbBusy(true);
+    setOrbTurns((turns) => [...turns, {
+      id: `user_${timestamp}_${turns.length}`,
+      role: "user",
+      text,
+      timestamp
+    }]);
     setChatText("");
+    try {
+      const response = await api<OrbChatResponse>("/api/orb/chat", {
+        method: "POST",
+        body: JSON.stringify({ message: text })
+      });
+      pulseOrb();
+      setOrbTurns((turns) => [...turns, {
+        id: `ward_${response.trace_id}`,
+        role: "ward",
+        text: response.reply,
+        timestamp: response.timestamp
+      }]);
+      if (response.surface === "sessions") {
+        setActiveView("sessions");
+        setSessionsOpen(true);
+        setRightPanelOpen(false);
+      } else {
+        setActiveView(response.surface);
+        setRightPanelOpen(true);
+        setSessionsOpen(false);
+      }
+    } finally {
+      setOrbBusy(false);
+    }
   }
 
   const planRounds: PlanRoundName[] = ["context", "proposal", "critique", "convergence", "decision"];
@@ -1269,6 +1318,7 @@ function App() {
     { id: "settings", label: "Settings", meta: profile?.display_name ?? "profile", icon: Settings }
   ];
   const activeCommand = commandTabs.find((tab) => tab.id === activeView) ?? commandTabs[0];
+  const latestOrbReply = [...orbTurns].reverse().find((turn) => turn.role === "ward")?.text;
 
   return (
     <main className="orb-shell">
@@ -1324,19 +1374,29 @@ function App() {
           <p>{overview?.brief.narration ?? "WARD is preparing your brief."}</p>
         </div>
         <WardOrb pulseKey={orbPulse} />
-        <form className="orb-dock" onSubmit={submitOrbChat}>
+        <form className="orb-dock" onSubmit={(event) => submitOrbChat(event).catch((err) => setError(err.message))}>
           <Button className="speak-cta" type="button" onClick={() => {
             pulseOrb();
-            overview && speak(overview.brief.narration, overview.profile);
+            overview && speak(latestOrbReply ?? overview.brief.narration, overview.profile);
           }}>
             <Mic className="size-5" />
             Speak
           </Button>
-          <input value={chatText} onChange={(event) => setChatText(event.target.value)} placeholder="Ask WARD..." />
-          <Button size="icon" type="submit" aria-label="Send to WARD">
+          <input value={chatText} onChange={(event) => setChatText(event.target.value)} placeholder="Ask WARD..." disabled={orbBusy} />
+          <Button size="icon" type="submit" aria-label="Send to WARD" disabled={orbBusy}>
             <Send className="size-4" />
           </Button>
         </form>
+        {orbTurns.length ? (
+          <div className="orb-transcript">
+            {orbTurns.slice(-4).map((turn) => (
+              <div className={turn.role === "ward" ? "ward" : "user"} key={turn.id}>
+                <span>{turn.role === "ward" ? "WARD" : "You"}</span>
+                <p>{turn.text}</p>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </section>
 
       {rightPanelOpen || sessionsOpen ? (

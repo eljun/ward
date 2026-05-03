@@ -20,6 +20,10 @@
 
 ## In Progress
 
+- [ ] `8B` Orb Chat Command Loop
+  - Doc: [docs/task/008b-orb-chat-command-loop.md](docs/task/008b-orb-chat-command-loop.md)
+  - Goal: Bottom WARD orb chat returns deterministic local replies and opens relevant drawers before real brain routing.
+
 - [ ] `8A` Command Center Navigation Layout
   - Doc: [docs/task/008a-command-center-navigation.md](docs/task/008a-command-center-navigation.md)
   - Goal: Centered WARD command-orb home with Sessions drawer, settings/menu drawer, Three.js orb, and Tailwind/shadcn-style UI primitives.
@@ -164,6 +168,7 @@
 - Task 008 session UI shows readable brain choices, state pills, a selected-brain status strip, latest-message summaries, and concise event log payloads for adapter smoke tests.
 - Task 008A Command Center orb shell exposes Sessions via the top-left drawer and supporting surfaces through the top-right command menu while preserving existing controls.
 - Task 008A runtime-served UI root returns 200 and serves the orb/glassy Vite bundle.
+- Task 008B `/api/orb/chat` returns deterministic WARD replies for overview, session, memory, planning, workspace, and settings intents.
 
 ## Done
 

@@ -422,6 +422,105 @@ async function readJson(req: Request): Promise<unknown> {
   return req.json().catch(() => ({}));
 }
 
+function readableCount(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+type OrbChatSurface = "overview" | "workspaces" | "planning" | "sessions" | "memory" | "settings";
+
+type OrbChatReply = {
+  reply: string;
+  surface: OrbChatSurface;
+  suggestions: string[];
+  trace_id: string;
+  timestamp: string;
+};
+
+async function orbChatReply(message: string): Promise<OrbChatReply> {
+  const normalized = message.toLowerCase();
+  const profile = getProfile();
+  const overview = await getOverview();
+  const workspaces = listWorkspaces();
+  const tasks = listTasks();
+  const sessions = listHarnessSessions({ include_incognito: false });
+  const openTasks = tasks.filter((task) => task.status !== "done" && task.status !== "canceled");
+  const activeSessions = sessions.filter((session) => !["done", "failed", "blocked", "canceled"].includes(session.lifecycle_state ?? ""));
+  const latestSession = sessions[0] ?? null;
+  const greetingName = profile.display_name || profile.honorific || "there";
+  const overviewNarration = overview.brief.narration.trim();
+
+  if (/\b(session|sessions|agent|run|running|claude|codex)\b/.test(normalized)) {
+    const latest = latestSession
+      ? ` Latest session is ${latestSession.brain_id ?? "unknown brain"} in ${latestSession.lifecycle_state ?? "unknown"} state.`
+      : " No sessions have been launched yet.";
+    return {
+      reply: `I found ${readableCount(sessions.length, "session")} and ${readableCount(activeSessions.length, "active run")}.${latest}`,
+      surface: "sessions",
+      suggestions: ["Open Sessions", "Launch a stub run", "Check agent status"],
+      trace_id: createTraceId("orb"),
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  if (/\b(memory|wiki|note|notes|remember|search)\b/.test(normalized)) {
+    return {
+      reply: `Memory is ready. I can help search wiki pages, inspect preferences, or open the current workspace memory next.`,
+      surface: "memory",
+      suggestions: ["Open Memory", "Search wiki", "Review preferences"],
+      trace_id: createTraceId("orb"),
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  if (/\b(plan|planning|proposal|decision|clarify)\b/.test(normalized)) {
+    return {
+      reply: `Planning is available. I can help start a Plan Mode packet, review the current decision, or generate tasks from an approved plan.`,
+      surface: "planning",
+      suggestions: ["Open Planning", "Start plan", "Review decision"],
+      trace_id: createTraceId("orb"),
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  if (/\b(task|tasks|workspace|workspaces|attachment|repo)\b/.test(normalized)) {
+    return {
+      reply: `You have ${readableCount(workspaces.length, "workspace")} and ${readableCount(openTasks.length, "open task")}. I can open the workspace console so you can add tasks, attach files, or refresh code context.`,
+      surface: "workspaces",
+      suggestions: ["Open Workspaces", "Create task", "Refresh context"],
+      trace_id: createTraceId("orb"),
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  if (/\b(setting|settings|profile|voice|tts|theme)\b/.test(normalized)) {
+    return {
+      reply: `Settings are ready. You can adjust profile, voice, tone, presence, and the local WARD preferences from there.`,
+      surface: "settings",
+      suggestions: ["Open Settings", "Adjust voice", "Review profile"],
+      trace_id: createTraceId("orb"),
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  if (/\b(hi|hello|hey|status|overview|brief|today)\b/.test(normalized)) {
+    return {
+      reply: overviewNarration || `Hey ${greetingName}, WARD is warm.`,
+      surface: "overview",
+      suggestions: ["Open Overview", "Speak brief", "Warm cache"],
+      trace_id: createTraceId("orb"),
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  return {
+    reply: `I heard you. I can route this toward sessions, planning, workspaces, memory, or settings. For the next slice, this reply loop can route into a real Claude or Codex brain.`,
+    surface: "overview",
+    suggestions: ["Open Overview", "Open Sessions", "Start planning"],
+    trace_id: createTraceId("orb"),
+    timestamp: new Date().toISOString()
+  };
+}
+
 function route(url: URL): string[] {
   return url.pathname.split("/").filter(Boolean).slice(1);
 }
@@ -503,6 +602,15 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
 
     if (parts[0] === "profile" && req.method === "PATCH") {
       return json({ ok: true, profile: updateProfile(ProfilePatchSchema.parse(await readJson(req))) });
+    }
+
+    if (parts[0] === "orb" && parts[1] === "chat" && req.method === "POST") {
+      const body = await readJson(req) as { message?: unknown };
+      const message = typeof body.message === "string" ? body.message.trim() : "";
+      if (!message) {
+        return json({ ok: false, error: "Message is required" }, 400);
+      }
+      return json({ ok: true, message, ...await orbChatReply(message) });
     }
 
     if (parts[0] === "preferences" && req.method === "GET") {
