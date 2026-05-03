@@ -327,6 +327,65 @@ function commandExists(command: string): boolean {
   return spawnSync("which", [command], { stdio: "ignore" }).status === 0;
 }
 
+async function commandOutput(command: string, args: string[]): Promise<{ code: number | null; stdout: string; stderr: string; error?: Error }> {
+  return new Promise((resolvePromise) => {
+    const child = spawn(command, args, {
+      cwd: resolveRepoRoot(),
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => child.kill("SIGTERM"), 5000);
+    timer.unref?.();
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      resolvePromise({ code: null, stdout, stderr, error });
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      resolvePromise({ code, stdout, stderr });
+    });
+  });
+}
+
+async function cliLoginCheck(command: "claude" | "codex"): Promise<DoctorCheck> {
+  if (!commandExists(command)) {
+    return { name: `${command}_auth`, status: "warn", detail: `${command} not found on PATH` };
+  }
+  if (command === "claude") {
+    const status = await commandOutput("claude", ["auth", "status"]);
+    try {
+      const parsed = JSON.parse(status.stdout) as { loggedIn?: boolean; authMethod?: string };
+      return {
+        name: "claude_auth",
+        status: parsed.loggedIn ? "pass" : "warn",
+        detail: parsed.loggedIn ? `logged in via ${parsed.authMethod ?? "unknown"}` : "not logged in; run claude auth login"
+      };
+    } catch {
+      const detail = `${status.stdout}\n${status.stderr}`.trim();
+      return {
+        name: "claude_auth",
+        status: status.code === 0 ? "pass" : "warn",
+        detail: detail || "unable to read claude auth status"
+      };
+    }
+  }
+  const status = await commandOutput("codex", ["login", "status"]);
+  const detail = `${status.stdout}\n${status.stderr}`.trim();
+  return {
+    name: "codex_auth",
+    status: status.code === 0 && /logged in/i.test(detail) ? "pass" : "warn",
+    detail: detail || "unable to read codex login status"
+  };
+}
+
 async function ptySmoke(): Promise<string> {
   ensureNodePtyHelperExecutable();
   const script = `
@@ -478,6 +537,8 @@ async function commandDoctor(args: string[] = []): Promise<CliResult> {
       detail: commandExists(command) ? `${command} found on PATH` : `${command} not found on PATH`
     });
   }
+  checks.push(await cliLoginCheck("claude"));
+  checks.push(await cliLoginCheck("codex"));
 
   try {
     checks.push({ name: "pty_smoke", status: "pass", detail: await ptySmoke() });
@@ -1031,7 +1092,7 @@ async function commandSession(args: string[]): Promise<CliResult> {
     const parsed = parseFlags(rest);
     const [workspace] = parsed.positional;
     if (!workspace) {
-      throw new Error("Usage: ward session launch <workspace-slug> [--task <task-id>] [--mode visible|headless] [--scenario default|fails|await-approval|tool-denied|idle-timeout|visible-echo|qa-missing-evidence|file-write|throughput|long-running]");
+      throw new Error("Usage: ward session launch <workspace-slug> [--task <task-id>] [--brain <brain-id>] [--runtime local|cli|sdk|api] [--mode visible|headless] [--scenario default|fails|await-approval|tool-denied|idle-timeout|visible-echo|qa-missing-evidence|file-write|throughput|long-running]");
     }
     const allowedTools = listFlag(parsed.flags, "allow-tools");
     const data = await apiRequest("/api/sessions", {
@@ -1039,6 +1100,8 @@ async function commandSession(args: string[]): Promise<CliResult> {
       body: JSON.stringify({
         workspace_slug: workspace,
         task_id: stringFlag(parsed.flags, "task"),
+        brain_id: stringFlag(parsed.flags, "brain") ?? stringFlag(parsed.flags, "brain-id"),
+        runtime_kind: stringFlag(parsed.flags, "runtime") ?? stringFlag(parsed.flags, "runtime-kind"),
         mode: stringFlag(parsed.flags, "mode") ?? "headless",
         scenario: stringFlag(parsed.flags, "scenario") ?? "default",
         goal: stringFlag(parsed.flags, "goal"),

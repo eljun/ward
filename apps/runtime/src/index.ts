@@ -6,7 +6,6 @@ import {
   AppendWikiPageSchema,
   CreateTaskSchema,
   CreateWorkspaceSchema,
-  LaunchSessionSchema,
   OpenGateSchema,
   ProfilePatchSchema,
   AnswerPlanSchema,
@@ -21,10 +20,11 @@ import {
   createEvent,
   createTraceId,
   inferAttachmentKind,
+  type HarnessLaunch,
   type HarnessLifecycleState,
   type RuntimeHealth
 } from "@ward/core";
-import { StubHarnessAdapter, type RunningHarness } from "@ward/harness";
+import { ClaudeCliHarnessAdapter, CodexCliHarnessAdapter, StubHarnessAdapter, type RunningHarness } from "@ward/harness";
 import {
   acquireInstanceLock,
   addTaskArtifact,
@@ -115,6 +115,8 @@ import {
 const HOST = "127.0.0.1";
 const GLOBAL_HARNESS_CAP = Number(process.env.WARD_HARNESS_GLOBAL_CAP ?? "2");
 const stubHarness = new StubHarnessAdapter();
+const claudeCliHarness = new ClaudeCliHarnessAdapter();
+const codexCliHarness = new CodexCliHarnessAdapter();
 const activeHarnesses = new Map<string, RunningHarness>();
 const sessionEventSubscribers = new Map<string, Set<(event: unknown) => void>>();
 const terminalSubscribers = new Map<string, Set<(data: string) => void>>();
@@ -191,6 +193,20 @@ function recordHarnessCost(sessionId: string): void {
   });
 }
 
+function harnessForLaunch(launch: HarnessLaunch): {
+  kind: string;
+  launch(input: HarnessLaunch): Promise<RunningHarness>;
+} {
+  const brain = getBrain(launch.brain_id);
+  if (brain?.kind === "claude" && launch.runtime_kind === "cli") {
+    return claudeCliHarness;
+  }
+  if (brain?.kind === "codex" && launch.runtime_kind === "cli") {
+    return codexCliHarness;
+  }
+  return stubHarness;
+}
+
 async function consumeHarness(run: RunningHarness): Promise<void> {
   for await (const event of run.events()) {
     await publishHarnessEvent(run.sessionId, event);
@@ -215,12 +231,12 @@ async function consumeHarness(run: RunningHarness): Promise<void> {
       return;
     }
     const fallbackSummary = current.lifecycle_state === "done"
-      ? "Stub harness session completed."
+      ? "Harness session completed."
       : current.lifecycle_state === "canceled"
         ? "Harness session canceled."
         : current.lifecycle_state === "blocked"
           ? "Harness session blocked."
-          : "Stub harness session failed.";
+          : "Harness session failed.";
     await finalizeHarnessSession(run.sessionId, current.lifecycle_state as "done" | "failed" | "blocked" | "canceled", fallbackSummary);
     recordHarnessCost(run.sessionId);
     void drainHarnessQueue();
@@ -229,8 +245,8 @@ async function consumeHarness(run: RunningHarness): Promise<void> {
 
   const nextState = exit.exitCode === 0 ? "done" : "failed";
   const summary = exit.exitCode === 0
-    ? "Stub harness session completed."
-    : `Stub harness session failed with exit code ${exit.exitCode ?? "unknown"}.`;
+    ? "Harness session completed."
+    : `Harness session failed with exit code ${exit.exitCode ?? "unknown"}.`;
   await finalizeHarnessSession(run.sessionId, nextState, summary);
   recordHarnessCost(run.sessionId);
   void drainHarnessQueue();
@@ -257,10 +273,11 @@ async function publishHarnessEvent(sessionId: string, event: unknown): Promise<v
 
 async function startClaimedHarnessSession(sessionId: string): Promise<void> {
   const detail = await getHarnessSessionDetail(sessionId);
-  const run = await stubHarness.launch(detail.launch);
+  const adapter = harnessForLaunch(detail.launch);
+  const run = await adapter.launch(detail.launch);
   activeHarnesses.set(sessionId, run);
   setHarnessWorkerPid(sessionId, run.pid);
-  await transitionHarnessSession(sessionId, "initializing", "Stub harness spawned.");
+  await transitionHarnessSession(sessionId, "initializing", `${adapter.kind} harness spawned.`);
   const session = getHarnessSession(sessionId);
   await publishHarnessEvent(sessionId, createEvent({
     event_type: "agent.invoked",
@@ -271,7 +288,8 @@ async function startClaimedHarnessSession(sessionId: string): Promise<void> {
     payload: {
       brain_id: session.brain_id,
       runtime_kind: session.runtime_kind,
-      mode: session.mode
+      mode: session.mode,
+      adapter_kind: adapter.kind
     }
   }));
   void consumeHarness(run).catch(async (error) => {
@@ -303,7 +321,7 @@ async function drainHarnessQueue(): Promise<void> {
 }
 
 async function launchHarnessSession(body: unknown): Promise<Awaited<ReturnType<typeof getHarnessSessionDetail>>> {
-  const prepared = await prepareHarnessLaunch(LaunchSessionSchema.parse(body));
+  const prepared = await prepareHarnessLaunch(body);
   await drainHarnessQueue();
   return getHarnessSessionDetail(prepared.session.id);
 }

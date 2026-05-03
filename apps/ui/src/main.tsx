@@ -277,6 +277,18 @@ type HarnessSessionDetail = {
   };
 };
 
+type BrainConfig = {
+  id: string;
+  kind: string;
+  runtime: string;
+  enabled: boolean;
+  accounting: string;
+};
+
+type BrainRegistry = {
+  brains: BrainConfig[];
+};
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     cache: "no-store",
@@ -394,10 +406,15 @@ function App() {
   const [sessionDetail, setSessionDetail] = useState<HarnessSessionDetail | null>(null);
   const [sessionBusy, setSessionBusy] = useState<"" | "launch" | "cancel" | "refresh">("");
   const [terminalInput, setTerminalInput] = useState("");
+  const [brainRegistry, setBrainRegistry] = useState<BrainRegistry>({ brains: [] });
 
   const selectedWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.slug === selectedSlug) ?? null,
     [selectedSlug, workspaces]
+  );
+  const enabledBrains = useMemo(
+    () => brainRegistry.brains.filter((brain) => brain.enabled),
+    [brainRegistry.brains]
   );
 
   async function refresh() {
@@ -406,10 +423,12 @@ function App() {
     const workspaceResponse = await api<{ workspaces: Workspace[] }>("/api/workspaces");
     const taskResponse = await api<{ tasks: Task[] }>("/api/tasks");
     const overviewResponse = await api<{ overview: Overview }>("/api/overview");
+    const brainResponse = await api<{ registry: BrainRegistry }>("/api/brains");
     setProfile(profileResponse.profile);
     setWorkspaces(workspaceResponse.workspaces);
     setTasks(taskResponse.tasks);
     setOverview(overviewResponse.overview);
+    setBrainRegistry(brainResponse.registry);
     if (!selectedSlug && workspaceResponse.workspaces[0]) {
       setSelectedSlug(workspaceResponse.workspaces[0].slug);
     }
@@ -543,6 +562,9 @@ function App() {
       "worker.status",
       "worker.message",
       "worker.terminal",
+      "worker.tool_call",
+      "worker.error",
+      "worker.vendor_event",
       "worker.exit",
       "watchdog.timeout",
       "mcp.tool_denied",
@@ -844,12 +866,14 @@ function App() {
     const form = new FormData(event.currentTarget);
     const taskId = String(form.get("task_id") ?? "");
     const scenario = String(form.get("scenario") ?? "default");
+    const brainId = String(form.get("brain_id") ?? "stub-worker");
     try {
       const response = await api<{ detail: HarnessSessionDetail }>("/api/sessions", {
         method: "POST",
         body: JSON.stringify({
           workspace_slug: selectedWorkspace.slug,
           task_id: taskId || undefined,
+          brain_id: brainId,
           mode: String(form.get("mode") ?? "headless"),
           scenario,
           goal: String(form.get("goal") ?? "") || undefined,
@@ -1358,6 +1382,13 @@ function App() {
                 <option key={task.id} value={task.id}>{task.title}</option>
               ))}
             </select>
+            <select name="brain_id" defaultValue="stub-worker" disabled={!selectedWorkspace}>
+              {enabledBrains.map((brain) => (
+                <option key={brain.id} value={brain.id}>
+                  {brain.id} · {brain.runtime} · {brain.accounting}
+                </option>
+              ))}
+            </select>
             <div className="session-controls">
               <select name="mode" defaultValue="headless" disabled={!selectedWorkspace}>
                 <option value="headless">Headless</option>
@@ -1377,7 +1408,7 @@ function App() {
               </select>
             </div>
             <button type="submit" disabled={!selectedWorkspace || sessionBusy !== ""}>
-              {sessionBusy === "launch" ? "Launching..." : "Launch Stub"}
+              {sessionBusy === "launch" ? "Launching..." : "Launch"}
             </button>
           </form>
           <div className="list compact">

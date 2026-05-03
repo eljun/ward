@@ -23,7 +23,7 @@
 - [ ] `8` Real Agent Adapters and Cost Ledger
   - Doc: [docs/task/008-real-agent-adapters.md](docs/task/008-real-agent-adapters.md)
   - Goal: Claude Code + Codex CLI adapters (subscription auth default); SDK / API / local opt-ins; full cost ledger with three accounting modes.
-  - Current slice: brain registry defaults, cost/quota ledger schema, repository APIs, and CLI/API read surfaces.
+  - Current slice: Claude/Codex CLI adapter harness, vendor login probes, session brain selection, and provider-limit handling.
 
 ## Testing
 
@@ -144,6 +144,19 @@
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json brain enable local-openai-compatible`
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json brain route recap_and_brief stub-worker`
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json doctor`
+- `bun run typecheck`
+- `bun run build`
+- `git diff --check`
+- `bun test` reports no test files in the repo yet
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json doctor`
+- Task 008 doctor reports `claude_auth` logged in via `claude.ai` and `codex_auth` logged in using ChatGPT.
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json session launch task-eight-smoke --brain claude-code-cli --mode headless --goal "Adapter smoke only. Do not modify files. Reply with WARD_CLAUDE_ADAPTER_OK and one short sentence." --wall-ms 60000 --idle-ms 15000`
+- Claude Code CLI adapter launched headless with subscription auth, streamed JSON events, reached `done`, and captured `WARD_CLAUDE_ADAPTER_OK`.
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json session launch task-eight-smoke --brain codex-cli --mode headless --goal "Adapter smoke only. Do not modify files. Reply with WARD_CODEX_ADAPTER_OK and one short sentence." --wall-ms 90000 --idle-ms 30000`
+- Codex CLI adapter launched headless with subscription auth and streamed JSON events; the run hit the current Codex usage limit and WARD classified the session as `blocked`.
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json cost today`
+- cost summary records subscription invocations and duration for `claude-code-cli` and `codex-cli`.
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json quota list --limit 10`
 
 ## Done
 

@@ -247,3 +247,63 @@ compact signals and hard-memory artifacts.
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json brain enable local-openai-compatible` - PASS
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json brain route recap_and_brief stub-worker` - PASS
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json doctor` - PASS
+
+### CLI Adapter Slice
+
+#### What Changed
+
+- Added Claude Code and Codex CLI harness adapters behind the existing
+  `RunningHarness` contract.
+- Added runtime adapter routing: `claude-code-cli` and `codex-cli` now route
+  to CLI harnesses when their Brain Registry runtime is `cli`; the 007 stub
+  remains the default and fallback for local/simulated brains.
+- Added vendor login probes to `ward doctor` for `claude auth status` and
+  `codex login status`.
+- Added `ward session launch --brain <brain-id> --runtime <kind>` support,
+  with runtime inferred from the selected brain by default.
+- Added UI brain selection for session launches, defaulting to `stub-worker`
+  to avoid accidental real-agent runs.
+- Added stream parsers that map Claude/Codex JSONL output, lifecycle markers,
+  tool calls, errors, and provider metadata into WARD session events while
+  preserving raw output in `pty.raw`.
+- Classified provider/auth/quota failures as `blocked` instead of generic
+  implementation failures.
+
+#### Files Changed
+
+- `packages/harness/src/index.ts` - Adds Claude/Codex CLI adapters, probes,
+  prompt building, stream parsing, status marker parsing, watchdog handling,
+  and provider-limit classification.
+- `packages/memory/src/sessions.ts` - Validates selected brains, infers
+  runtime from Brain Registry, and writes a CLI-safe MCP overlay envelope.
+- `apps/runtime/src/index.ts` - Routes launched sessions to the selected
+  harness adapter and records generic harness summaries/costs.
+- `apps/cli/src/main.ts` - Adds CLI brain/runtime flags and login checks in
+  `ward doctor`.
+- `apps/ui/src/main.tsx` - Adds enabled-brain selection in the session launch
+  UI and subscribes to CLI-specific event types.
+
+#### Deviations From Plan
+
+- Kept API adapters out of this slice. Normal Claude/Codex CLI is the phase-1
+  path because it uses existing subscription auth and avoids early API key
+  and billing complexity.
+- Codex real-run success could not be completed because the account hit its
+  current usage limit during smoke verification. The adapter did launch,
+  stream JSON, persist events, and classify the provider limit as `blocked`.
+
+#### Verification Run
+
+- `bun run typecheck` - PASS
+- `bun run build` - PASS
+- `git diff --check` - PASS
+- `bun test` - FAIL (no test files exist in the repo yet)
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json doctor` - PASS
+  (`claude_auth` logged in via `claude.ai`; `codex_auth` logged in using
+  ChatGPT)
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json session launch task-eight-smoke --brain claude-code-cli --mode headless --goal "Adapter smoke only. Do not modify files. Reply with WARD_CLAUDE_ADAPTER_OK and one short sentence." --wall-ms 60000 --idle-ms 15000` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json session show session_4559bc1f571844f9` - PASS (`done`, captured `WARD_CLAUDE_ADAPTER_OK`)
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json session launch task-eight-smoke --brain codex-cli --mode headless --goal "Adapter smoke only. Do not modify files. Reply with WARD_CODEX_ADAPTER_OK and one short sentence." --wall-ms 90000 --idle-ms 30000` - PARTIAL
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json session show session_65ea1b06b7004cca` - PASS for WARD behavior (`blocked`, provider usage-limit error captured)
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json cost today` - PASS (subscription invocations/duration recorded for Claude and Codex)
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json quota list --limit 10` - PASS

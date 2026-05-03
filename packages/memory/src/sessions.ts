@@ -21,7 +21,6 @@ import {
   type HarnessSessionDetail,
   type HarnessSessionPaths,
   type HarnessTaskContract,
-  type LaunchSessionInput,
   type SessionListFilters,
   type WardEvent
 } from "@ward/core";
@@ -29,6 +28,7 @@ import type { Database } from "bun:sqlite";
 import { ensureWardLayout, resolveWardPaths, type WardPaths } from "./layout.ts";
 import { openWardDatabase } from "./migrations.ts";
 import { ensureMemoryBootstrap } from "./wiki.ts";
+import { getBrain } from "./brains.ts";
 
 type WorkspaceRow = {
   id: number;
@@ -280,11 +280,14 @@ async function ensureSessionFiles(paths: HarnessSessionPaths, launch: HarnessLau
   await writeFile(paths.task_contract_path, JSON.stringify(launch.task_contract, null, 2), "utf8");
   await writeFile(paths.context_packet_path, JSON.stringify(launch.context_packet, null, 2), "utf8");
   await writeFile(paths.mcp_overlay_path, JSON.stringify({
-    allowed_tools: launch.allowed_tools,
-    autonomy_level: launch.autonomy_level,
-    incognito: launch.incognito,
-    timeouts: launch.timeouts,
-    generated_at: launch.created_at
+    mcpServers: {},
+    ward: {
+      allowed_tools: launch.allowed_tools,
+      autonomy_level: launch.autonomy_level,
+      incognito: launch.incognito,
+      timeouts: launch.timeouts,
+      generated_at: launch.created_at
+    }
   }, null, 2), "utf8");
   await writeFile(paths.events_path, "", "utf8");
   await writeFile(paths.pty_raw_path, "", "utf8");
@@ -303,6 +306,12 @@ async function readLaunchFromFiles(session: HarnessSession, paths: HarnessSessio
     autonomy_level?: HarnessLaunch["autonomy_level"];
     incognito?: boolean;
     timeouts?: HarnessLaunch["timeouts"];
+    ward?: {
+      allowed_tools?: string[];
+      autonomy_level?: HarnessLaunch["autonomy_level"];
+      incognito?: boolean;
+      timeouts?: HarnessLaunch["timeouts"];
+    };
   };
   return HarnessLaunchSchema.parse({
     session_id: session.id,
@@ -314,17 +323,31 @@ async function readLaunchFromFiles(session: HarnessSession, paths: HarnessSessio
     working_dir: session.working_dir ?? "",
     task_contract: taskContract,
     context_packet: contextPacket,
-    allowed_tools: overlay.allowed_tools ?? ["ward.status"],
+    allowed_tools: overlay.ward?.allowed_tools ?? overlay.allowed_tools ?? ["ward.status"],
     mcp_overlay_path: paths.mcp_overlay_path,
-    timeouts: overlay.timeouts ?? {
+    timeouts: overlay.ward?.timeouts ?? overlay.timeouts ?? {
       wall_clock_max_ms: 120000,
       idle_max_ms: 30000
     },
-    autonomy_level: overlay.autonomy_level ?? "standard",
-    incognito: overlay.incognito ?? session.incognito,
+    autonomy_level: overlay.ward?.autonomy_level ?? overlay.autonomy_level ?? "standard",
+    incognito: overlay.ward?.incognito ?? overlay.incognito ?? session.incognito,
     created_at: session.started_at,
     scenario: session.scenario ?? "default"
   });
+}
+
+function runtimeKindForBrain(brainId: string, requested: ReturnType<typeof LaunchSessionSchema.parse>["runtime_kind"], runtimeExplicit: boolean): ReturnType<typeof LaunchSessionSchema.parse>["runtime_kind"] {
+  if (runtimeExplicit) {
+    return requested;
+  }
+  const brain = getBrain(brainId);
+  if (!brain) {
+    return requested;
+  }
+  if (brain.runtime === "simulated") {
+    return "local";
+  }
+  return brain.runtime;
 }
 
 function sessionRowQuery(): string {
@@ -361,11 +384,21 @@ function harnessSessionClause(): string {
   return "session.trace_id IS NOT NULL AND session.scenario IS NOT NULL AND session.working_dir IS NOT NULL";
 }
 
-export async function prepareHarnessLaunch(input: LaunchSessionInput): Promise<{ session: HarnessSession; launch: HarnessLaunch; paths: HarnessSessionPaths }> {
+export async function prepareHarnessLaunch(input: unknown): Promise<{ session: HarnessSession; launch: HarnessLaunch; paths: HarnessSessionPaths }> {
+  const rawInput = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
   const parsed = LaunchSessionSchema.parse(input);
+  const runtimeExplicit = typeof rawInput.runtime_kind === "string";
   return withDbAsync(async (db, paths) => {
     await ensureWardLayout(paths);
     await ensureMemoryBootstrap(paths);
+    const brain = getBrain(parsed.brain_id);
+    if (!brain) {
+      throw new Error(`Brain not found: ${parsed.brain_id}`);
+    }
+    if (!brain.enabled) {
+      throw new Error(`Brain is disabled: ${parsed.brain_id}`);
+    }
+    const runtimeKind = runtimeKindForBrain(parsed.brain_id, parsed.runtime_kind, runtimeExplicit);
 
     const workspace = workspaceBySlug(db, parsed.workspace_slug);
     const task = parsed.task_id ? taskById(db, parsed.task_id) : null;
@@ -398,7 +431,7 @@ export async function prepareHarnessLaunch(input: LaunchSessionInput): Promise<{
       workspace_id: workspace.id,
       task_id: task?.id ?? null,
       brain_id: parsed.brain_id,
-      runtime_kind: parsed.runtime_kind,
+      runtime_kind: runtimeKind,
       mode: parsed.mode,
       working_dir: workingDir,
       task_contract: contract,
@@ -429,7 +462,7 @@ export async function prepareHarnessLaunch(input: LaunchSessionInput): Promise<{
       workspace.id,
       task?.id ?? null,
       parsed.brain_id,
-      parsed.runtime_kind,
+      runtimeKind,
       parsed.mode,
       workingDir,
       parsed.incognito ? 1 : 0,
@@ -460,7 +493,7 @@ export async function prepareHarnessLaunch(input: LaunchSessionInput): Promise<{
       source: "runtime",
       payload: {
         brain_id: parsed.brain_id,
-        runtime_kind: parsed.runtime_kind,
+        runtime_kind: runtimeKind,
         mode: parsed.mode,
         scenario: parsed.scenario
       }
