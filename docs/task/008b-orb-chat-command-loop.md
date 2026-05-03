@@ -1,6 +1,6 @@
 # Task 008B: Orb Chat Command Loop
 
-- Status: `in_progress`
+- Status: `done`
 - Type: `enhancement`
 - Version Impact: `minor`
 - Priority: `medium`

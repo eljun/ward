@@ -20,18 +20,14 @@
 
 ## In Progress
 
-- [ ] `8B` Orb Chat Command Loop
-  - Doc: [docs/task/008b-orb-chat-command-loop.md](docs/task/008b-orb-chat-command-loop.md)
-  - Goal: Bottom WARD orb chat returns deterministic local replies and opens relevant drawers before real brain routing.
-
-- [ ] `8A` Command Center Navigation Layout
-  - Doc: [docs/task/008a-command-center-navigation.md](docs/task/008a-command-center-navigation.md)
-  - Goal: Centered WARD command-orb home with Sessions drawer, settings/menu drawer, Three.js orb, and Tailwind/shadcn-style UI primitives.
+- [ ] `8C` Brain Settings and Cost Dashboard
+  - Doc: [docs/task/008c-brain-settings-cost-dashboard.md](docs/task/008c-brain-settings-cost-dashboard.md)
+  - Goal: Make Brain Registry, routing, cost summary, forecast, and quota ledger visible/editable from Settings.
 
 - [ ] `8` Real Agent Adapters and Cost Ledger
   - Doc: [docs/task/008-real-agent-adapters.md](docs/task/008-real-agent-adapters.md)
   - Goal: Claude Code + Codex CLI adapters (subscription auth default); SDK / API / local opt-ins; full cost ledger with three accounting modes.
-  - Current slice: Claude/Codex CLI adapter harness, provider-limit handling, and clearer UI for brain selection and session outcomes.
+  - Current slice: Settings UI for Brain Registry, routing, cost ledger, and quota visibility.
 
 ## Testing
 
@@ -169,8 +165,17 @@
 - Task 008A Command Center orb shell exposes Sessions via the top-left drawer and supporting surfaces through the top-right command menu while preserving existing controls.
 - Task 008A runtime-served UI root returns 200 and serves the orb/glassy Vite bundle.
 - Task 008B `/api/orb/chat` returns deterministic WARD replies for overview, session, memory, planning, workspace, and settings intents.
+- Task 008C Settings backing APIs return Brain Registry, cost forecast, cost summary, quota ledger, and persist brain enable/disable plus route updates.
 
 ## Done
+
+- [x] `8B` Orb Chat Command Loop
+  - Doc: [docs/task/008b-orb-chat-command-loop.md](docs/task/008b-orb-chat-command-loop.md)
+  - Goal: Bottom WARD orb chat returns deterministic local replies and opens relevant drawers before real brain routing.
+
+- [x] `8A` Command Center Navigation Layout
+  - Doc: [docs/task/008a-command-center-navigation.md](docs/task/008a-command-center-navigation.md)
+  - Goal: Centered WARD command-orb home with Sessions drawer, settings/menu drawer, Three.js orb, and Tailwind/shadcn-style UI primitives.
 
 - [x] `7` Harness Abstraction, Lifecycle, and Watchdog
   - Doc: [docs/task/007-harness-lifecycle.md](docs/task/007-harness-lifecycle.md)

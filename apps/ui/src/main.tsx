@@ -285,12 +285,69 @@ type BrainConfig = {
   id: string;
   kind: string;
   runtime: string;
+  auth: string;
+  model: string | null;
+  base_url: string | null;
+  tags: string[];
+  concurrency_cap: number;
   enabled: boolean;
   accounting: string;
+  source: string;
+};
+
+type BrainRoute = {
+  concern: string;
+  brain_ids: string[];
+  updated_at: string;
 };
 
 type BrainRegistry = {
   brains: BrainConfig[];
+  routing: BrainRoute[];
+};
+
+type CostLedgerSummary = {
+  date: string;
+  entries: number;
+  totals: {
+    invocations: number;
+    duration_ms: number;
+    tokens_in: number;
+    tokens_out: number;
+    dollars_estimate: number;
+  };
+  by_brain: Array<{
+    brain_id: string;
+    accounting_mode: string;
+    invocations: number;
+    duration_ms: number;
+    tokens_in: number;
+    tokens_out: number;
+    dollars_estimate: number;
+  }>;
+};
+
+type CostForecast = {
+  generated_at: string;
+  forecasts: Array<{
+    brain_id: string;
+    metric: string;
+    current: number;
+    limit: number | null;
+    projected_breach_at: string | null;
+    status: string;
+  }>;
+};
+
+type QuotaLedgerEntry = {
+  id: string;
+  policy_id: string;
+  target: string;
+  metric: string;
+  amount: number;
+  trace_id: string;
+  session_id: string | null;
+  created_at: string;
 };
 
 type CommandView = "overview" | "workspaces" | "planning" | "sessions" | "memory" | "settings";
@@ -418,6 +475,37 @@ function accountingLabel(accounting: string): string {
     return "local";
   }
   return accounting;
+}
+
+function authLabel(auth: string): string {
+  if (auth === "api_key") {
+    return "API key";
+  }
+  return titleCase(auth);
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) {
+    return `${ms} ms`;
+  }
+  if (ms < 60000) {
+    return `${(ms / 1000).toFixed(1)} s`;
+  }
+  return `${Math.round(ms / 60000)} min`;
+}
+
+function formatDollars(value: number): string {
+  return value > 0 ? `$${value.toFixed(4)}` : "$0";
+}
+
+function formatMetric(value: number, metric: string): string {
+  if (metric === "duration_ms") {
+    return formatDuration(value);
+  }
+  if (metric === "dollars") {
+    return formatDollars(value);
+  }
+  return String(value);
 }
 
 function brainDisplayName(brain: BrainConfig | null | undefined, fallbackId?: string | null): string {
@@ -643,7 +731,11 @@ function App() {
   const [sessionDetail, setSessionDetail] = useState<HarnessSessionDetail | null>(null);
   const [sessionBusy, setSessionBusy] = useState<"" | "launch" | "cancel" | "refresh">("");
   const [terminalInput, setTerminalInput] = useState("");
-  const [brainRegistry, setBrainRegistry] = useState<BrainRegistry>({ brains: [] });
+  const [brainRegistry, setBrainRegistry] = useState<BrainRegistry>({ brains: [], routing: [] });
+  const [costSummary, setCostSummary] = useState<CostLedgerSummary | null>(null);
+  const [costForecast, setCostForecast] = useState<CostForecast | null>(null);
+  const [quotaLedger, setQuotaLedger] = useState<QuotaLedgerEntry[]>([]);
+  const [brainBusy, setBrainBusy] = useState("");
   const [activeView, setActiveView] = useState<CommandView>("overview");
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
@@ -668,6 +760,18 @@ function App() {
       : null,
     [brainRegistry.brains, selectedSession?.brain_id]
   );
+  const brainById = useMemo(
+    () => new Map(brainRegistry.brains.map((brain) => [brain.id, brain])),
+    [brainRegistry.brains]
+  );
+  const costByBrain = useMemo(
+    () => new Map((costSummary?.by_brain ?? []).map((row) => [row.brain_id, row])),
+    [costSummary?.by_brain]
+  );
+  const forecastByBrain = useMemo(
+    () => new Map((costForecast?.forecasts ?? []).map((forecast) => [forecast.brain_id, forecast])),
+    [costForecast?.forecasts]
+  );
   const latestSessionIssue = useMemo(
     () => [...(sessionDetail?.events ?? [])].reverse().find((event) => {
       const payload = asRecord(event.payload);
@@ -687,18 +791,32 @@ function App() {
     [sessionDetail?.events]
   );
 
+  async function refreshBrainSurface() {
+    const [brainResponse, costResponse, forecastResponse, quotaResponse] = await Promise.all([
+      api<{ registry: BrainRegistry }>("/api/brains"),
+      api<{ summary: CostLedgerSummary }>("/api/cost/today"),
+      api<{ forecast: CostForecast }>("/api/cost/forecast"),
+      api<{ ledger: QuotaLedgerEntry[] }>("/api/quota?limit=8")
+    ]);
+    setBrainRegistry(brainResponse.registry);
+    setCostSummary(costResponse.summary);
+    setCostForecast(forecastResponse.forecast);
+    setQuotaLedger(quotaResponse.ledger);
+  }
+
   async function refresh() {
     setError("");
-    const profileResponse = await api<{ profile: Profile }>("/api/profile");
-    const workspaceResponse = await api<{ workspaces: Workspace[] }>("/api/workspaces");
-    const taskResponse = await api<{ tasks: Task[] }>("/api/tasks");
-    const overviewResponse = await api<{ overview: Overview }>("/api/overview");
-    const brainResponse = await api<{ registry: BrainRegistry }>("/api/brains");
+    const [profileResponse, workspaceResponse, taskResponse, overviewResponse] = await Promise.all([
+      api<{ profile: Profile }>("/api/profile"),
+      api<{ workspaces: Workspace[] }>("/api/workspaces"),
+      api<{ tasks: Task[] }>("/api/tasks"),
+      api<{ overview: Overview }>("/api/overview")
+    ]);
     setProfile(profileResponse.profile);
     setWorkspaces(workspaceResponse.workspaces);
     setTasks(taskResponse.tasks);
     setOverview(overviewResponse.overview);
-    setBrainRegistry(brainResponse.registry);
+    await refreshBrainSurface();
     if (!selectedSlug && workspaceResponse.workspaces[0]) {
       setSelectedSlug(workspaceResponse.workspaces[0].slug);
     }
@@ -898,6 +1016,43 @@ function App() {
       }
     } : current);
     setMessage("Profile saved.");
+  }
+
+  async function toggleBrain(brainId: string, enabled: boolean) {
+    setBrainBusy(`brain:${brainId}`);
+    try {
+      await api(`/api/brains/${encodeURIComponent(brainId)}/${enabled ? "enable" : "disable"}`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      setMessage(`${brainId} ${enabled ? "enabled" : "disabled"}.`);
+      await refreshBrainSurface();
+    } finally {
+      setBrainBusy("");
+    }
+  }
+
+  async function saveBrainRoute(event: FormEvent<HTMLFormElement>, concern: string) {
+    event.preventDefault();
+    const select = event.currentTarget.elements.namedItem("brain_ids");
+    const brainIds = select instanceof HTMLSelectElement
+      ? Array.from(select.selectedOptions).map((option) => option.value)
+      : [];
+    if (brainIds.length === 0) {
+      setError("Select at least one brain for this route.");
+      return;
+    }
+    setBrainBusy(`route:${concern}`);
+    try {
+      await api(`/api/brains/routes/${encodeURIComponent(concern)}`, {
+        method: "PUT",
+        body: JSON.stringify({ brain_ids: brainIds })
+      });
+      setMessage(`${titleCase(concern)} route updated.`);
+      await refreshBrainSurface();
+    } finally {
+      setBrainBusy("");
+    }
   }
 
   async function createWorkspace(event: FormEvent<HTMLFormElement>) {
@@ -1487,7 +1642,7 @@ function App() {
       </section> : null}
 
       {activeView === "settings" ? <section className="settings-grid">
-        <form className="panel" key={profile ? `${profile.display_name}-${profile.tts_voice ?? ""}-${voices.length}` : "profile-loading"} onSubmit={saveProfile}>
+        <form className="panel profile-panel" key={profile ? `${profile.display_name}-${profile.tts_voice ?? ""}-${voices.length}` : "profile-loading"} onSubmit={saveProfile}>
           <div className="panel-title">
             <h2>Profile</h2>
             <span>{profile?.display_name ? "ready" : "first run"}</span>
@@ -1544,6 +1699,129 @@ function App() {
           </div>
           <button type="submit">Save</button>
         </form>
+
+        <section className="panel brains-panel">
+          <div className="panel-title">
+            <h2>Brains</h2>
+            <span>{enabledBrains.length}/{brainRegistry.brains.length} enabled</span>
+          </div>
+          <div className="brain-dashboard">
+            {brainRegistry.brains.map((brain) => {
+              const cost = costByBrain.get(brain.id);
+              const forecast = forecastByBrain.get(brain.id);
+              return (
+                <div className={brain.enabled ? "brain-control active" : "brain-control"} key={brain.id}>
+                  <div className="brain-control-head">
+                    <div>
+                      <strong>{brainDisplayName(brain)}</strong>
+                      <span>{brain.id}</span>
+                    </div>
+                    <Badge tone={brain.enabled ? "success" : "default"}>{brain.enabled ? "enabled" : "off"}</Badge>
+                  </div>
+                  <div className="brain-facts">
+                    <span>{runtimeLabel(brain.runtime)}</span>
+                    <span>{authLabel(brain.auth)}</span>
+                    <span>{accountingLabel(brain.accounting)}</span>
+                    <span>{brain.concurrency_cap} cap</span>
+                  </div>
+                  <div className="brain-tags">
+                    {(brain.tags.length ? brain.tags : [brain.source]).slice(0, 4).map((tag) => <span key={tag}>{tag}</span>)}
+                  </div>
+                  <div className="brain-cost-line">
+                    <span>{cost?.invocations ?? 0} calls</span>
+                    <span>{formatDuration(cost?.duration_ms ?? 0)}</span>
+                    <span>{formatDollars(cost?.dollars_estimate ?? 0)}</span>
+                    <span>{forecast ? `${forecast.status} ${formatMetric(forecast.current, forecast.metric)}` : "forecast pending"}</span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={brainBusy === `brain:${brain.id}`}
+                    onClick={() => toggleBrain(brain.id, !brain.enabled).catch((err) => setError(err.message))}
+                  >
+                    {brainBusy === `brain:${brain.id}` ? "Saving..." : brain.enabled ? "Disable" : "Enable"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="panel routes-panel">
+          <div className="panel-title">
+            <h2>Routing</h2>
+            <span>{brainRegistry.routing.length}</span>
+          </div>
+          <div className="route-list">
+            {brainRegistry.routing.map((route) => (
+              <form className="route-row" key={`${route.concern}-${route.updated_at}`} onSubmit={(event) => saveBrainRoute(event, route.concern).catch((err) => setError(err.message))}>
+                <div>
+                  <strong>{titleCase(route.concern)}</strong>
+                  <span>{route.brain_ids.map((brainId) => brainDisplayName(brainById.get(brainId), brainId)).join(" + ")}</span>
+                </div>
+                <select name="brain_ids" multiple defaultValue={route.brain_ids} size={Math.min(4, Math.max(2, brainRegistry.brains.length))}>
+                  {brainRegistry.brains.map((brain) => (
+                    <option key={brain.id} value={brain.id}>
+                      {brainDisplayName(brain)} · {runtimeLabel(brain.runtime)}
+                    </option>
+                  ))}
+                </select>
+                <button type="submit" disabled={brainBusy === `route:${route.concern}`}>
+                  {brainBusy === `route:${route.concern}` ? "Saving..." : "Save"}
+                </button>
+              </form>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel cost-panel">
+          <div className="panel-title">
+            <h2>Cost Today</h2>
+            <span>{costSummary?.date ?? "today"}</span>
+          </div>
+          <div className="cost-metrics">
+            <div>
+              <strong>{costSummary?.totals.invocations ?? 0}</strong>
+              <span>calls</span>
+            </div>
+            <div>
+              <strong>{formatDuration(costSummary?.totals.duration_ms ?? 0)}</strong>
+              <span>duration</span>
+            </div>
+            <div>
+              <strong>{(costSummary?.totals.tokens_in ?? 0) + (costSummary?.totals.tokens_out ?? 0)}</strong>
+              <span>tokens</span>
+            </div>
+            <div>
+              <strong>{formatDollars(costSummary?.totals.dollars_estimate ?? 0)}</strong>
+              <span>estimate</span>
+            </div>
+          </div>
+          <div className="cost-list">
+            {(costSummary?.by_brain ?? []).map((row) => (
+              <div className="cost-row" key={`${row.brain_id}-${row.accounting_mode}`}>
+                <strong>{brainDisplayName(brainById.get(row.brain_id), row.brain_id)}</strong>
+                <span>{row.invocations} calls · {formatDuration(row.duration_ms)} · {formatDollars(row.dollars_estimate)}</span>
+              </div>
+            ))}
+            {costSummary && costSummary.by_brain.length === 0 ? <p className="empty-copy">No brain calls recorded today.</p> : null}
+          </div>
+        </section>
+
+        <section className="panel quota-panel">
+          <div className="panel-title">
+            <h2>Quota Ledger</h2>
+            <span>{quotaLedger.length}</span>
+          </div>
+          <div className="quota-list">
+            {quotaLedger.map((entry) => (
+              <div className="quota-row" key={entry.id}>
+                <strong>{entry.policy_id}</strong>
+                <span>{entry.target} · {entry.metric} · {formatMetric(entry.amount, entry.metric)}</span>
+              </div>
+            ))}
+            {quotaLedger.length === 0 ? <p className="empty-copy">Quota events will appear after brain calls.</p> : null}
+          </div>
+        </section>
       </section> : null}
 
       {activeView === "workspaces" ? <section className="workspace-grid">

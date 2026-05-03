@@ -297,6 +297,49 @@ compact signals and hard-memory artifacts.
 - `bun run typecheck` - PASS
 - `bun run build` - PASS
 - `git diff --check` - PASS
+
+### Brain Settings and Cost Dashboard Slice
+
+#### What Changed
+
+- Added a Settings Brains panel that lists every registered brain with
+  enabled state, runtime, auth mode, accounting mode, tags, concurrency cap,
+  same-day usage, and forecast status.
+- Added UI enable/disable actions backed by the existing Brain Registry API.
+- Added a Routing panel that exposes each concern and allows updating one or
+  more selected brains through the existing route API.
+- Added Cost Today and Quota Ledger panels backed by the existing Task 008
+  cost, forecast, and quota endpoints.
+
+#### Files Changed
+
+- `apps/ui/src/main.tsx` - Adds registry/cost/quota state, refresh logic,
+  Settings panel rendering, and Brain Registry mutation handlers.
+- `apps/ui/src/styles.css` - Adds compact glass styles for brain controls,
+  routing rows, cost metrics, and quota rows.
+- `TASKS.md` - Tracks the Task 008C slice and marks 008A/008B as completed
+  sub-slices.
+- `docs/task/008c-brain-settings-cost-dashboard.md` - Documents the slice.
+
+#### Deviations From Plan
+
+- Historical 7-day trend charts and budget-cap editing remain deferred until
+  there is enough cost history and policy data to make those controls useful.
+
+#### Verification Run
+
+- `bun run build` - PASS
+- `git diff --check` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json up` - PASS
+- authenticated Settings backing API smoke - PASS
+  - `/api/brains`
+  - `/api/brains/<id>/enable`
+  - `/api/brains/<id>/disable`
+  - `/api/brains/routes/recap_and_brief`
+  - `/api/cost/today`
+  - `/api/cost/forecast`
+  - `/api/quota?limit=8`
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json down` - PASS
 - `bun test` - FAIL (no test files exist in the repo yet)
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json doctor` - PASS
   (`claude_auth` logged in via `claude.ai`; `codex_auth` logged in using
