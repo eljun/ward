@@ -319,6 +319,204 @@ function scopePath(scope: string): string {
   return `workspace/${encodeURIComponent(scope)}`;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function asText(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function firstText(record: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = asText(record[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function compactJson(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function truncateText(value: string, maxLength = 180): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}...` : normalized;
+}
+
+function titleCase(value: string): string {
+  return value
+    .replace(/[-_]/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function brainKindLabel(kind: string): string {
+  if (kind === "stub") {
+    return "Stub worker";
+  }
+  if (kind === "claude") {
+    return "Claude Code";
+  }
+  if (kind === "codex") {
+    return "Codex CLI";
+  }
+  if (kind === "local") {
+    return "Local model";
+  }
+  return titleCase(kind);
+}
+
+function runtimeLabel(runtime: string | null | undefined): string {
+  if (!runtime) {
+    return "runtime pending";
+  }
+  if (runtime === "cli") {
+    return "CLI";
+  }
+  if (runtime === "stub") {
+    return "simulated";
+  }
+  return runtime;
+}
+
+function accountingLabel(accounting: string): string {
+  if (accounting === "subscription") {
+    return "subscription";
+  }
+  if (accounting === "local") {
+    return "local";
+  }
+  return accounting;
+}
+
+function brainDisplayName(brain: BrainConfig | null | undefined, fallbackId?: string | null): string {
+  if (!brain) {
+    return fallbackId ?? "No brain selected";
+  }
+  return brainKindLabel(brain.kind);
+}
+
+function brainSummary(brain: BrainConfig | null | undefined, fallbackId?: string | null): string {
+  if (!brain) {
+    return fallbackId ? `${fallbackId} · registry pending` : "Select a brain to launch.";
+  }
+  return `${brain.id} · ${runtimeLabel(brain.runtime)} · ${accountingLabel(brain.accounting)}`;
+}
+
+function stateTone(state: string | null | undefined): string {
+  if (state === "done") {
+    return "done";
+  }
+  if (state === "blocked" || state === "awaiting_approval") {
+    return "blocked";
+  }
+  if (state === "failed" || state === "canceled") {
+    return "failed";
+  }
+  if (state === "running" || state === "initializing" || state === "implementing" || state === "testing" || state === "creating_artifacts") {
+    return "running";
+  }
+  return "idle";
+}
+
+function stateLabel(state: string | null | undefined): string {
+  return state ? titleCase(state) : "Idle";
+}
+
+function eventSummary(event: WardEvent): string {
+  const payload = asRecord(event.payload);
+  if (!payload) {
+    return truncateText(compactJson(event.payload));
+  }
+
+  if (event.event_type === "session.created") {
+    const brainId = firstText(payload, ["brain_id"]) ?? "Selected brain";
+    const mode = firstText(payload, ["mode"]) ?? "headless";
+    return `${brainId} queued in ${mode} mode.`;
+  }
+
+  if (event.event_type === "agent.invoked") {
+    const adapter = firstText(payload, ["adapter_kind"]) ?? "adapter";
+    const brainId = firstText(payload, ["brain_id"]) ?? "brain";
+    return `${brainId} launched through ${adapter}.`;
+  }
+
+  if (event.event_type === "session.state_changed") {
+    const fromState = firstText(payload, ["from_state"]) ?? "new";
+    const toState = firstText(payload, ["to_state"]) ?? "updated";
+    const detailText = firstText(payload, ["detail"]);
+    return `${stateLabel(fromState)} -> ${stateLabel(toState)}${detailText ? `: ${detailText}` : ""}`;
+  }
+
+  if (event.event_type === "worker.status") {
+    const state = firstText(payload, ["state"]) ?? "status";
+    const detailText = firstText(payload, ["detail"]);
+    return detailText ? `${stateLabel(state)}: ${detailText}` : stateLabel(state);
+  }
+
+  if (event.event_type === "worker.message") {
+    return firstText(payload, ["text", "summary", "message"]) ?? "Worker message received.";
+  }
+
+  if (event.event_type === "worker.error") {
+    return firstText(payload, ["error", "message", "detail"]) ?? "Worker error captured.";
+  }
+
+  if (event.event_type === "worker.vendor_event") {
+    const rawType = firstText(payload, ["raw_type", "type"]) ?? "vendor event";
+    return `Vendor event: ${rawType}`;
+  }
+
+  if (event.event_type === "worker.exit") {
+    const exitCode = payload.exit_code ?? "unknown";
+    const signalCode = payload.signal_code ?? "none";
+    return `Process exited with code ${String(exitCode)} and signal ${String(signalCode)}.`;
+  }
+
+  if (event.event_type === "watchdog.timeout") {
+    return firstText(payload, ["detail", "kind"]) ?? "Watchdog timeout fired.";
+  }
+
+  if (event.event_type === "mcp.tool_denied") {
+    return firstText(payload, ["tool_name", "name"]) ?? "Tool call denied by policy.";
+  }
+
+  if (event.event_type === "mcp.tool_result") {
+    return firstText(payload, ["tool_name", "name"]) ?? "Tool call allowed.";
+  }
+
+  if (event.event_type === "agent.artifact_written") {
+    return firstText(payload, ["note", "path", "file_path"]) ?? "Artifact written.";
+  }
+
+  if (event.event_type === "agent.signal" || event.event_type === "agent.qa_reviewed") {
+    return firstText(payload, ["summary", "status"]) ?? "Agent signal received.";
+  }
+
+  if (event.event_type === "fs.file_written") {
+    return firstText(payload, ["relative_path", "file_path", "path"]) ?? "File written.";
+  }
+
+  if (event.event_type === "session.reverted") {
+    return firstText(payload, ["detail"]) ?? "Session file changes reverted.";
+  }
+
+  if (event.event_type === "worker.terminal") {
+    return firstText(payload, ["data"]) ?? "Terminal output received.";
+  }
+
+  return truncateText(compactJson(event.payload));
+}
+
 function preferredVoice(name?: string | null): SpeechSynthesisVoice | null {
   if (!("speechSynthesis" in window)) {
     return null;
@@ -415,6 +613,31 @@ function App() {
   const enabledBrains = useMemo(
     () => brainRegistry.brains.filter((brain) => brain.enabled),
     [brainRegistry.brains]
+  );
+  const selectedSession = sessionDetail?.session ?? null;
+  const selectedSessionBrain = useMemo(
+    () => selectedSession?.brain_id
+      ? brainRegistry.brains.find((brain) => brain.id === selectedSession.brain_id) ?? null
+      : null,
+    [brainRegistry.brains, selectedSession?.brain_id]
+  );
+  const latestSessionIssue = useMemo(
+    () => [...(sessionDetail?.events ?? [])].reverse().find((event) => {
+      const payload = asRecord(event.payload);
+      const payloadState = payload ? firstText(payload, ["state", "to_state"]) : null;
+      return event.event_type === "worker.error"
+        || event.event_type === "watchdog.timeout"
+        || payloadState === "blocked"
+        || payloadState === "failed";
+    }) ?? null,
+    [sessionDetail?.events]
+  );
+  const latestAssistantMessage = useMemo(
+    () => [...(sessionDetail?.events ?? [])].reverse().find((event) => {
+      const payload = asRecord(event.payload);
+      return event.event_type === "worker.message" && Boolean(payload && firstText(payload, ["text", "summary", "message"]));
+    }) ?? null,
+    [sessionDetail?.events]
   );
 
   async function refresh() {
@@ -1382,10 +1605,11 @@ function App() {
                 <option key={task.id} value={task.id}>{task.title}</option>
               ))}
             </select>
-            <select name="brain_id" defaultValue="stub-worker" disabled={!selectedWorkspace}>
+            <select name="brain_id" defaultValue="stub-worker" disabled={!selectedWorkspace || enabledBrains.length === 0}>
+              {enabledBrains.length === 0 ? <option value="">No brains enabled</option> : null}
               {enabledBrains.map((brain) => (
                 <option key={brain.id} value={brain.id}>
-                  {brain.id} · {brain.runtime} · {brain.accounting}
+                  {brainDisplayName(brain)} · {runtimeLabel(brain.runtime)} · {accountingLabel(brain.accounting)}
                 </option>
               ))}
             </select>
@@ -1395,32 +1619,44 @@ function App() {
                 <option value="visible">Visible</option>
               </select>
               <select name="scenario" defaultValue="default" disabled={!selectedWorkspace}>
-                <option value="default">Default</option>
-                <option value="fails">Fails</option>
-                <option value="await-approval">Approval</option>
-                <option value="tool-denied">Tool Denied</option>
-                <option value="idle-timeout">Idle Watchdog</option>
-                <option value="visible-echo">Visible Echo</option>
-                <option value="qa-missing-evidence">QA Missing Evidence</option>
-                <option value="file-write">File Write</option>
+                <option value="default">Normal run</option>
+                <option value="fails">Stub failure</option>
+                <option value="await-approval">Approval wait</option>
+                <option value="tool-denied">Tool denied</option>
+                <option value="idle-timeout">Idle watchdog</option>
+                <option value="visible-echo">Visible echo</option>
+                <option value="qa-missing-evidence">QA missing evidence</option>
+                <option value="file-write">File write</option>
                 <option value="throughput">Throughput</option>
-                <option value="long-running">Long Running</option>
+                <option value="long-running">Long running</option>
               </select>
             </div>
-            <button type="submit" disabled={!selectedWorkspace || sessionBusy !== ""}>
-              {sessionBusy === "launch" ? "Launching..." : "Launch"}
+            <button type="submit" disabled={!selectedWorkspace || enabledBrains.length === 0 || sessionBusy !== ""}>
+              {sessionBusy === "launch" ? "Launching..." : "Launch Session"}
             </button>
           </form>
+          <div className="brain-registry">
+            {enabledBrains.map((brain) => (
+              <div className="brain-card" key={brain.id}>
+                <strong>{brainDisplayName(brain)}</strong>
+                <span>{brainSummary(brain)}</span>
+              </div>
+            ))}
+          </div>
           <div className="list compact">
             {sessions.map((session) => (
               <button
-                className={session.id === selectedSessionId ? "item active" : "item"}
+                className={session.id === selectedSessionId ? "item session-card active" : "item session-card"}
                 key={session.id}
                 type="button"
                 onClick={() => readSession(session.id).catch((err) => setError(err.message))}
               >
-                <strong>{session.task_title ?? session.brain_id ?? session.id}</strong>
-                <span>{session.lifecycle_state ?? "new"} · {session.queue_state ?? "queue"}{session.queue_position ? ` #${session.queue_position}` : ""}</span>
+                <div className="session-row">
+                  <strong>{session.task_title ?? session.brain_id ?? session.id}</strong>
+                  <span className={`state-pill ${stateTone(session.lifecycle_state)}`}>{stateLabel(session.lifecycle_state)}</span>
+                </div>
+                <span>{session.brain_id ?? "brain pending"} · {runtimeLabel(session.runtime_kind)} · {session.mode ?? "headless"}</span>
+                <small>{session.queue_state ?? "queue"}{session.queue_position ? ` #${session.queue_position}` : ""}</small>
               </button>
             ))}
           </div>
@@ -1429,7 +1665,7 @@ function App() {
         <section className="panel session-detail">
           <div className="panel-title">
             <h2>{sessionDetail?.session.task_title ?? "Session Detail"}</h2>
-            <span>{sessionDetail?.session.lifecycle_state ?? "idle"}</span>
+            <span className={`state-pill ${stateTone(sessionDetail?.session.lifecycle_state)}`}>{stateLabel(sessionDetail?.session.lifecycle_state)}</span>
           </div>
           <div className="session-metrics">
             <div>
@@ -1444,11 +1680,44 @@ function App() {
               <strong>{sessionDetail?.session.worker_pid ?? "-"}</strong>
               <span>worker</span>
             </div>
+            <div>
+              <strong>{sessionDetail?.session.mode ?? "-"}</strong>
+              <span>mode</span>
+            </div>
           </div>
+          <div className="session-status-strip">
+            <div>
+              <span>Brain</span>
+              <strong>{brainDisplayName(selectedSessionBrain, selectedSession?.brain_id)}</strong>
+              <small>{brainSummary(selectedSessionBrain, selectedSession?.brain_id)}</small>
+            </div>
+            <div>
+              <span>Runtime</span>
+              <strong>{runtimeLabel(selectedSession?.runtime_kind)}</strong>
+              <small>{selectedSession?.scenario ? titleCase(selectedSession.scenario) : "No scenario"}</small>
+            </div>
+            <div>
+              <span>Queue</span>
+              <strong>{selectedSession?.queue_state ?? "idle"}</strong>
+              <small>{selectedSession?.queue_position ? `position ${selectedSession.queue_position}` : "no wait"}</small>
+            </div>
+          </div>
+          {latestSessionIssue ? (
+            <div className={`session-banner ${stateTone(sessionDetail?.session.lifecycle_state)}`}>
+              <strong>{sessionDetail?.session.lifecycle_state === "blocked" ? "Blocked, not broken" : "Latest issue"}</strong>
+              <p>{eventSummary(latestSessionIssue)}</p>
+            </div>
+          ) : null}
           <div className="moderator">
-            <strong>{sessionDetail?.session.summary ?? sessionDetail?.session.brain_id ?? "No active session"}</strong>
-            <p>{sessionDetail?.session.working_dir ?? (selectedWorkspace ? "Launch a stub session for this workspace." : "Select a workspace first.")}</p>
+            <strong>{sessionDetail ? sessionDetail.session.summary ?? brainDisplayName(selectedSessionBrain, selectedSession?.brain_id) : "No active session"}</strong>
+            <p>{sessionDetail?.session.working_dir ?? (selectedWorkspace ? "Launch a session for this workspace." : "Select a workspace first.")}</p>
           </div>
+          {latestAssistantMessage ? (
+            <div className="moderator latest-message">
+              <strong>Latest Message</strong>
+              <p>{eventSummary(latestAssistantMessage)}</p>
+            </div>
+          ) : null}
           {sessionDetail?.session.mode === "visible" ? (
             <div className="terminal-pane">
               <pre>{sessionDetail.pty_output || "Terminal output will appear here."}</pre>
@@ -1478,10 +1747,10 @@ function App() {
           </div>
           <div className="event-log">
             {sessionDetail?.events.slice(-12).map((event) => (
-              <div key={event.event_id}>
+              <div className="event-item" key={event.event_id}>
                 <strong>{event.event_type}</strong>
                 <span>{event.source} · {new Date(event.timestamp).toLocaleTimeString()}</span>
-                <small>{JSON.stringify(event.payload)}</small>
+                <small>{eventSummary(event)}</small>
               </div>
             ))}
           </div>

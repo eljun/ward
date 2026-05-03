@@ -23,7 +23,7 @@
 - [ ] `8` Real Agent Adapters and Cost Ledger
   - Doc: [docs/task/008-real-agent-adapters.md](docs/task/008-real-agent-adapters.md)
   - Goal: Claude Code + Codex CLI adapters (subscription auth default); SDK / API / local opt-ins; full cost ledger with three accounting modes.
-  - Current slice: Claude/Codex CLI adapter harness, vendor login probes, session brain selection, and provider-limit handling.
+  - Current slice: Claude/Codex CLI adapter harness, provider-limit handling, and clearer UI for brain selection and session outcomes.
 
 ## Testing
 
@@ -157,6 +157,7 @@
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json cost today`
 - cost summary records subscription invocations and duration for `claude-code-cli` and `codex-cli`.
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json quota list --limit 10`
+- Task 008 session UI shows readable brain choices, state pills, a selected-brain status strip, latest-message summaries, and concise event log payloads for adapter smoke tests.
 
 ## Done
 

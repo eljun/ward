@@ -211,7 +211,7 @@ h2 {
 
 .session-metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -325,6 +325,77 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.session-card {
+  gap: 6px;
+}
+
+.session-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 10px;
+}
+
+.session-row strong {
+  min-width: 0;
+}
+
+.state-pill {
+  border: 1px solid #d6dcd6;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #344148;
+  background: #f7f9f7;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.state-pill.done {
+  border-color: #b8d0bd;
+  background: #f0f7f1;
+  color: #1d4a2a;
+}
+
+.state-pill.running {
+  border-color: #b9cadd;
+  background: #eff5fa;
+  color: #243e5c;
+}
+
+.state-pill.blocked {
+  border-color: #ded2a2;
+  background: #fbf7e7;
+  color: #6b4c0b;
+}
+
+.state-pill.failed {
+  border-color: #e3b4b4;
+  background: #fbefef;
+  color: #7b2727;
+}
+
+.brain-registry {
+  display: grid;
+  gap: 8px;
+}
+
+.brain-card {
+  display: grid;
+  gap: 3px;
+  border: 1px solid #dce1dc;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fbfcfb;
+}
+
+.brain-card span {
+  color: #59656a;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
 .actions,
 .search-form {
   display: grid;
@@ -406,6 +477,59 @@ h2 {
   margin: 0;
   color: #344148;
   line-height: 1.45;
+}
+
+.session-status-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.session-status-strip div,
+.session-banner {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #edf0ed;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fbfcfb;
+}
+
+.session-status-strip span,
+.session-status-strip small {
+  color: #657178;
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.session-status-strip strong {
+  overflow-wrap: anywhere;
+}
+
+.session-banner {
+  border-color: #ded2a2;
+  background: #fbf7e7;
+}
+
+.session-banner.failed {
+  border-color: #e3b4b4;
+  background: #fbefef;
+}
+
+.session-banner.done {
+  border-color: #b8d0bd;
+  background: #f0f7f1;
+}
+
+.session-banner p {
+  margin: 0;
+  color: #344148;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.latest-message {
+  background: #fbfcfb;
 }
 
 .muted {
@@ -577,6 +701,7 @@ h2 {
     .session-actions,
     .metrics,
     .session-metrics,
+    .session-status-strip,
     .brief-panel .actions,
     .round-rail,
     .packet-columns,

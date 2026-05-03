@@ -307,3 +307,39 @@ compact signals and hard-memory artifacts.
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json session show session_65ea1b06b7004cca` - PASS for WARD behavior (`blocked`, provider usage-limit error captured)
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json cost today` - PASS (subscription invocations/duration recorded for Claude and Codex)
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json quota list --limit 10` - PASS
+
+### UI Clarity Slice
+
+#### What Changed
+
+- Reworked the session launch controls so enabled brains show readable names
+  (`Stub worker`, `Claude Code`, `Codex CLI`) with runtime and accounting mode.
+- Renamed the ambiguous `Default` scenario label to `Normal run` and tightened
+  the stub scenario labels.
+- Added state pills to session rows and the session detail header.
+- Added a selected-session status strip for brain, runtime, scenario, and queue
+  state.
+- Added a latest-issue banner so provider/auth/quota blocks read as intentional
+  `blocked` outcomes instead of mysterious failures.
+- Added a latest-message panel and concise event summaries so the event log no
+  longer exposes raw JSON as the primary UI.
+
+#### Files Changed
+
+- `apps/ui/src/main.tsx` - Adds display helpers, clearer brain/session labels,
+  selected-session summaries, latest issue/message extraction, and concise event
+  rendering.
+- `apps/ui/src/styles.css` - Adds state pills, brain cards, session status
+  strips, issue banners, and responsive layout support.
+- `TASKS.md` - Notes the current Task 008 UI clarity slice.
+
+#### Deviations From Plan
+
+- No harness or adapter behavior changed in this slice. It is a focused test
+  surface polish pass on top of the existing CLI adapter foundation.
+
+#### Verification Run
+
+- `bun run typecheck` - PASS
+- `bun run build` - PASS
+- `git diff --check` - PASS
