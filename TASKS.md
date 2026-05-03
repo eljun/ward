@@ -23,7 +23,7 @@
 - [ ] `8` Real Agent Adapters and Cost Ledger
   - Doc: [docs/task/008-real-agent-adapters.md](docs/task/008-real-agent-adapters.md)
   - Goal: Claude Code + Codex CLI adapters (subscription auth default); SDK / API / local opt-ins; full cost ledger with three accounting modes.
-  - Current slice: Workflow-skills bridge and QA Supervisor remain for Task 008 completion.
+  - Current slice: Phase-1 complete; SDK/API/local execution remains optional/deferred before Task 009.
 
 ## Testing
 
@@ -163,8 +163,13 @@
 - Task 008B `/api/orb/chat` returns deterministic WARD replies for overview, session, memory, planning, workspace, and settings intents.
 - Task 008C Settings backing APIs return Brain Registry, cost forecast, cost summary, quota ledger, and persist brain enable/disable plus route updates.
 - Task 008D budget caps persist through `ward brain budget`, cost forecast reports cap limits, over-cap launches fall back to `stub-worker`, and no-fallback over-cap launches reject clearly.
+- Task 008E workflow signals persist agent artifacts for task/implement/test, QA Supervisor rejects missing direct evidence, and passes once a matching `test_report` artifact exists.
 
 ## Done
+
+- [x] `8E` Workflow Skills Bridge and QA Supervisor Stub
+  - Doc: [docs/task/008e-workflow-skills-qa-supervisor.md](docs/task/008e-workflow-skills-qa-supervisor.md)
+  - Goal: Record workflow phase `AgentSignal`s, write evidence packets, and run a deterministic QA Supervisor review.
 
 - [x] `8D` Brain Budget Caps and Fallback
   - Doc: [docs/task/008d-brain-budget-caps-fallback.md](docs/task/008d-brain-budget-caps-fallback.md)

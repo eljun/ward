@@ -9,6 +9,8 @@ import {
   CreateWorkspaceSchema,
   OpenGateSchema,
   ProfilePatchSchema,
+  QaSupervisorInputSchema,
+  RecordAgentSignalSchema,
   AnswerPlanSchema,
   RevisePlanSchema,
   SearchQuerySchema,
@@ -92,7 +94,9 @@ import {
   resolveTaskGate,
   resolveRepoRoot,
   resolveWardPaths,
+  recordWorkflowAgentSignal,
   runMigrations,
+  runQaSupervisor,
   searchMemory,
   setPreference,
   setHarnessWorkerPid,
@@ -901,6 +905,14 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
 
     if (parts[0] === "tasks" && parts[1] && parts[2] === "artifacts" && req.method === "POST") {
       return json({ ok: true, artifact: addTaskArtifact(parts[1], AddArtifactSchema.parse(await readJson(req))) }, 201);
+    }
+
+    if (parts[0] === "tasks" && parts[1] && parts[2] === "signals" && req.method === "POST") {
+      return json({ ok: true, ...await recordWorkflowAgentSignal(parts[1], RecordAgentSignalSchema.parse(await readJson(req))) }, 201);
+    }
+
+    if (parts[0] === "tasks" && parts[1] && parts[2] === "qa-review" && req.method === "POST") {
+      return json({ ok: true, ...await runQaSupervisor(parts[1], QaSupervisorInputSchema.parse(await readJson(req))) }, 201);
     }
 
     if (parts[0] === "tasks" && parts[1] && parts[2] === "events" && req.method === "GET") {

@@ -284,6 +284,64 @@ export const AddArtifactSchema = z.object({
 });
 export type AddArtifactInput = z.input<typeof AddArtifactSchema>;
 
+export const AgentSignalStatusSchema = z.enum(["pass", "fail", "needs_work", "blocked", "needs_approval", "done"]);
+export type AgentSignalStatus = z.infer<typeof AgentSignalStatusSchema>;
+
+export const WorkflowPhaseSlugSchema = z.enum(["task", "implement", "simplify", "test", "document", "ship", "release"]);
+export type WorkflowPhaseSlug = z.infer<typeof WorkflowPhaseSlugSchema>;
+
+export const AgentArtifactRefSchema = z.object({
+  kind: z.string(),
+  path: z.string().optional(),
+  url: z.string().optional(),
+  checksum: z.string().optional(),
+  redacted: z.boolean().optional().default(false)
+});
+export type AgentArtifactRef = z.infer<typeof AgentArtifactRefSchema>;
+
+export const AgentSignalSchema = z.object({
+  agent_id: z.string(),
+  phase: WorkflowPhaseSlugSchema,
+  status: AgentSignalStatusSchema,
+  summary: z.string(),
+  artifacts: z.array(AgentArtifactRefSchema),
+  risks: z.array(z.string()),
+  missing_evidence: z.array(z.string()).default([]),
+  next_recommended_agent: z.string().nullable(),
+  trace_id: z.string(),
+  created_at: z.string()
+});
+export type AgentSignal = z.infer<typeof AgentSignalSchema>;
+
+export const RecordAgentSignalSchema = z.object({
+  phase: WorkflowPhaseSlugSchema,
+  status: AgentSignalStatusSchema.optional(),
+  summary: z.string().optional(),
+  artifacts: z.array(AgentArtifactRefSchema).optional().default([]),
+  risks: z.array(z.string()).optional().default([]),
+  missing_evidence: z.array(z.string()).optional().default([]),
+  next_recommended_agent: z.string().optional().nullable()
+});
+export type RecordAgentSignalInput = z.input<typeof RecordAgentSignalSchema>;
+
+export const QaSupervisorInputSchema = z.object({
+  session_id: z.string().optional(),
+  notes: z.string().optional()
+});
+export type QaSupervisorInput = z.input<typeof QaSupervisorInputSchema>;
+
+export const QaSupervisorReviewSchema = z.object({
+  task_id: z.string(),
+  status: z.enum(["pass", "needs_work", "blocked"]),
+  missing_evidence: z.array(z.string()),
+  harness_critique: z.array(z.string()),
+  confidence: z.number().min(0).max(1),
+  evidence_packet_path: z.string(),
+  trace_id: z.string(),
+  created_at: z.string()
+});
+export type QaSupervisorReview = z.infer<typeof QaSupervisorReviewSchema>;
+
 export const PreferenceSchema = z.object({
   id: z.number().int().positive(),
   scope: z.enum(["global", "workspace", "repo"]),

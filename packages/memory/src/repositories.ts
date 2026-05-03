@@ -3,11 +3,15 @@ import { copyFile, mkdir, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import {
   AddArtifactSchema,
+  AgentSignalSchema,
   AttachmentSchema,
   CreateTaskSchema,
   CreateWorkspaceSchema,
   OpenGateSchema,
   ProfilePatchSchema,
+  QaSupervisorInputSchema,
+  QaSupervisorReviewSchema,
+  RecordAgentSignalSchema,
   TaskArtifactSchema,
   TaskContractSchema,
   TaskGateSchema,
@@ -25,11 +29,16 @@ import {
   ingestorForKind,
   nowIso,
   type AddArtifactInput,
+  type AgentArtifactRef,
+  type AgentSignal,
   type CreateTaskInput,
   type CreateWorkspaceInput,
   type OpenGateInput,
   type Preference,
   type ProfilePatch,
+  type QaSupervisorInput,
+  type QaSupervisorReview,
+  type RecordAgentSignalInput,
   type TaskArtifact,
   type TaskGate,
   type TaskPhase,
@@ -223,6 +232,70 @@ function taskEvent(db: Database, event_type: string, task_id: string, payload: R
     source: "runtime",
     payload: { task_id, ...payload }
   }));
+}
+
+function workflowAgentId(phase: string): string {
+  const ids: Record<string, string> = {
+    task: "planning-agent",
+    implement: "coding-agent",
+    simplify: "quality-gate-agent",
+    test: "qa-agent",
+    document: "documentation-agent",
+    ship: "reporting-agent",
+    release: "release-playbook"
+  };
+  return ids[phase] ?? `${phase}-agent`;
+}
+
+function defaultSignalStatus(phase: string): AgentSignal["status"] {
+  return phase === "test" || phase === "simplify" ? "pass" : "done";
+}
+
+function defaultNextAgent(phase: string): string | null {
+  const next: Record<string, string> = {
+    task: "implement",
+    implement: "simplify",
+    simplify: "test",
+    test: "qa-supervisor",
+    document: "ship"
+  };
+  return next[phase] ?? null;
+}
+
+function workflowPhaseToTaskPhase(phase: string): TaskPhase {
+  const phases: Record<string, TaskPhase> = {
+    task: "planning",
+    implement: "implementation",
+    simplify: "quality_gate",
+    test: "testing",
+    document: "documentation",
+    ship: "shipping",
+    release: "closed"
+  };
+  return phases[phase] ?? "implementation";
+}
+
+function safeEvidenceName(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_.-]/g, "-");
+}
+
+function artifactMatchesCriterion(artifact: TaskArtifact, criterion: { id: string; statement: string }): boolean {
+  const haystack = [
+    artifact.artifact_kind,
+    artifact.path,
+    artifact.url,
+    artifact.checksum
+  ].filter(Boolean).join(" ").toLowerCase();
+  if (!haystack) {
+    return false;
+  }
+  const id = criterion.id.toLowerCase();
+  const words = criterion.statement.toLowerCase().split(/\W+/).filter((word) => word.length >= 4);
+  return haystack.includes(id) || words.some((word) => haystack.includes(word));
+}
+
+function directEvidenceArtifacts(artifacts: TaskArtifact[]): TaskArtifact[] {
+  return artifacts.filter((artifact) => /evidence|test|qa|screenshot|trace|log/i.test(artifact.artifact_kind));
 }
 
 export function ensureDefaultProfile(): UserProfile {
@@ -781,4 +854,138 @@ export async function copyArtifactToTask(taskId: string, sourcePath: string, kin
   const destination = join(artifactDir, basename(sourcePath));
   await copyFile(resolve(sourcePath), destination);
   return addTaskArtifact(taskId, { artifact_kind: kind, path: destination });
+}
+
+export async function recordWorkflowAgentSignal(taskId: string, input: RecordAgentSignalInput): Promise<{ signal: AgentSignal; artifact: TaskArtifact }> {
+  const parsed = RecordAgentSignalSchema.parse(input);
+  const detail = getTask(taskId);
+  const workspace = getWorkspaceById(detail.task.workspace_id);
+  if (!workspace) {
+    throw new Error("Workspace not found");
+  }
+  const timestamp = nowIso();
+  const traceId = createTraceId("agent");
+  const phase = parsed.phase;
+  const signal = AgentSignalSchema.parse({
+    agent_id: workflowAgentId(phase),
+    phase,
+    status: parsed.status ?? defaultSignalStatus(phase),
+    summary: parsed.summary ?? `${workflowAgentId(phase)} completed ${phase}.`,
+    artifacts: parsed.artifacts as AgentArtifactRef[],
+    risks: parsed.risks,
+    missing_evidence: parsed.missing_evidence,
+    next_recommended_agent: parsed.next_recommended_agent ?? defaultNextAgent(phase),
+    trace_id: traceId,
+    created_at: timestamp
+  });
+  const paths = resolveWardPaths();
+  await ensureWardLayout(paths);
+  const signalDir = join(paths.workspacesDir, workspace.slug, "agent-signals", taskId);
+  await mkdir(signalDir, { recursive: true, mode: 0o700 });
+  const signalPath = join(signalDir, `${timestamp.replaceAll(":", "-")}-${phase}.json`);
+  await writeFile(signalPath, JSON.stringify(signal, null, 2), "utf8");
+  const artifact = addTaskArtifact(taskId, { artifact_kind: "agent_signal", path: signalPath });
+  withDb((db) => {
+    db.query("UPDATE task SET lifecycle_phase = ?, updated_at = ? WHERE id = ?")
+      .run(workflowPhaseToTaskPhase(phase), timestamp, taskId);
+    taskEvent(db, "agent.signal", taskId, {
+      ...signal,
+      artifact_path: signalPath
+    });
+  });
+  return { signal, artifact };
+}
+
+export async function runQaSupervisor(taskId: string, input: QaSupervisorInput = {}): Promise<{ review: QaSupervisorReview; artifact: TaskArtifact }> {
+  const parsed = QaSupervisorInputSchema.parse(input);
+  const detail = getTask(taskId);
+  const workspace = getWorkspaceById(detail.task.workspace_id);
+  if (!workspace) {
+    throw new Error("Workspace not found");
+  }
+  const timestamp = nowIso();
+  const traceId = createTraceId("qa");
+  const criteria = detail.contract?.acceptance_criteria ?? [];
+  const evidenceArtifacts = directEvidenceArtifacts(detail.artifacts);
+  const missingEvidence = criteria
+    .filter((criterion) => !evidenceArtifacts.some((artifact) => artifactMatchesCriterion(artifact, criterion)))
+    .map((criterion) => `${criterion.id}: ${criterion.statement}`);
+  const testSignals = getTaskEvents(taskId).filter((event) => {
+    const payload = event.payload as { phase?: unknown; agent_id?: unknown };
+    return event.event_type === "agent.signal" && (payload.phase === "test" || payload.agent_id === "qa-agent");
+  });
+  const blockedSignal = testSignals.some((event) => (event.payload as { status?: unknown }).status === "blocked");
+  const harnessCritique: string[] = [];
+  if (testSignals.length === 0) {
+    harnessCritique.push("No QA Agent signal was found for this task.");
+  }
+  if (missingEvidence.length > 0) {
+    harnessCritique.push("One or more acceptance criteria do not have direct evidence artifacts.");
+  }
+  if (parsed.notes) {
+    harnessCritique.push(parsed.notes);
+  }
+  const status: QaSupervisorReview["status"] = blockedSignal
+    ? "blocked"
+    : missingEvidence.length > 0 || testSignals.length === 0
+      ? "needs_work"
+      : "pass";
+  const paths = resolveWardPaths();
+  await ensureWardLayout(paths);
+  const evidenceDir = join(paths.workspacesDir, workspace.slug, "evidence");
+  await mkdir(evidenceDir, { recursive: true, mode: 0o700 });
+  const evidencePacketPath = join(evidenceDir, `${safeEvidenceName(taskId)}.json`);
+  const review = QaSupervisorReviewSchema.parse({
+    task_id: taskId,
+    status,
+    missing_evidence: missingEvidence,
+    harness_critique: harnessCritique,
+    confidence: status === "pass" ? 0.82 : status === "blocked" ? 0.4 : 0.58,
+    evidence_packet_path: evidencePacketPath,
+    trace_id: traceId,
+    created_at: timestamp
+  });
+  const packet = {
+    task_id: taskId,
+    source_docs: detail.contract ? [detail.contract.id] : [],
+    implementation: {
+      changed_files: detail.contract?.file_plan.map((item) => item.path) ?? [],
+      key_decisions: [],
+      implementation_claims: testSignals.map((event) => String((event.payload as { summary?: unknown }).summary ?? ""))
+        .filter(Boolean)
+    },
+    qa: {
+      status,
+      tests_run: testSignals.map((event) => String((event.payload as { summary?: unknown }).summary ?? event.event_id)),
+      acceptance_criteria_results: criteria.map((criterion) => ({
+        criterion: criterion.statement,
+        status: missingEvidence.some((missing) => missing.startsWith(`${criterion.id}:`)) ? "blocked" : "pass",
+        evidence: evidenceArtifacts.find((artifact) => artifactMatchesCriterion(artifact, criterion))?.path ?? "missing"
+      })),
+      screenshots: evidenceArtifacts.filter((artifact) => /screenshot/i.test(artifact.artifact_kind)),
+      console_errors: [],
+      network_errors: [],
+      harness_critique: harnessCritique
+    },
+    docs: {
+      updated_files: [],
+      stale_docs_found: []
+    },
+    reporting: {},
+    confidence: {
+      status: status === "pass" ? "ready" : status,
+      reasons: harnessCritique
+    }
+  };
+  await writeFile(evidencePacketPath, JSON.stringify(packet, null, 2), "utf8");
+  const artifact = addTaskArtifact(taskId, { artifact_kind: "evidence_packet", path: evidencePacketPath });
+  withDb((db) => {
+    db.query("UPDATE task SET evidence_packet_path = ?, lifecycle_phase = 'qa_supervision', updated_at = ? WHERE id = ?")
+      .run(evidencePacketPath, timestamp, taskId);
+    taskEvent(db, "agent.qa_reviewed", taskId, {
+      ...review,
+      session_id: parsed.session_id ?? null
+    });
+  });
+  return { review, artifact };
 }

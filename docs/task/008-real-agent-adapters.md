@@ -391,6 +391,7 @@ compact signals and hard-memory artifacts.
 - over-cap `claude-code-cli` launch fell back to `stub-worker` before queuing - PASS
 - no-fallback over-cap launch rejected with `Brain budget exceeded...` - PASS
 - cap reset and `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json down` - PASS
+
 - `bun test` - FAIL (no test files exist in the repo yet)
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json doctor` - PASS
   (`claude_auth` logged in via `claude.ai`; `codex_auth` logged in using
@@ -401,6 +402,53 @@ compact signals and hard-memory artifacts.
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json session show session_65ea1b06b7004cca` - PASS for WARD behavior (`blocked`, provider usage-limit error captured)
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json cost today` - PASS (subscription invocations/duration recorded for Claude and Codex)
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json quota list --limit 10` - PASS
+
+### Workflow Skills Bridge and QA Supervisor Stub
+
+#### What Changed
+
+- Added structured workflow phase `AgentSignal` schemas for task, implement,
+  simplify, test, document, ship, and release.
+- Added durable signal persistence under the WARD workspace directory and
+  links each signal as a task artifact.
+- Added task events for recorded workflow signals.
+- Added deterministic QA Supervisor review that writes a task evidence packet
+  and emits `agent.qa_reviewed`.
+- QA Supervisor now returns `needs_work` when acceptance criteria lack direct
+  matching evidence artifacts, even when a test signal says `pass`.
+- Added runtime routes and CLI commands for `ward workflow signal` and
+  `ward workflow qa`.
+
+#### Files Changed
+
+- `packages/core/src/schemas.ts` - Adds workflow signal and QA review schemas.
+- `packages/memory/src/repositories.ts` - Adds workflow signal persistence and
+  QA Supervisor evidence packet generation.
+- `apps/runtime/src/index.ts` - Adds task signal and QA review API routes.
+- `apps/cli/src/main.ts` - Adds `ward workflow signal` and `ward workflow qa`.
+- `docs/task/008e-workflow-skills-qa-supervisor.md` - Documents the slice.
+- `TASKS.md` - Tracks Task 008E verification.
+
+#### Deviations From Plan
+
+- This slice does not invoke the external workflow skills directly. It
+  establishes the durable adapter contract first, so real skill invocation can
+  plug in without changing task evidence semantics.
+
+#### Verification Run
+
+- `bun run typecheck` - PASS
+- `bun run build` - PASS
+- `git diff --check` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json up` - PASS
+- created a contracted workflow smoke task with one acceptance criterion - PASS
+- `ward workflow signal <task-id> --phase task --status done` - PASS
+- `ward workflow signal <task-id> --phase implement --status done` - PASS
+- `ward workflow signal <task-id> --phase test --status pass` - PASS
+- `ward workflow qa <task-id>` without direct evidence - PASS (`needs_work`, missing `AC1`)
+- attached a matching `test_report` artifact and reran `ward workflow qa` - PASS (`pass`)
+- task detail shows agent-signal artifacts and latest evidence packet path - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json down` - PASS
 
 ### UI Clarity Slice
 

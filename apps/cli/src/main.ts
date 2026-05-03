@@ -145,6 +145,14 @@ function numberFlag(flags: Record<string, string | boolean | string[]>, key: str
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function artifactFlags(flags: Record<string, string | boolean | string[]>) {
+  return listFlag(flags, "artifact").map((value) => {
+    const [kind, ...pathParts] = value.split(":");
+    const path = pathParts.join(":");
+    return path ? { kind, path } : { kind: "file", path: value };
+  });
+}
+
 function nullableNumberFlag(flags: Record<string, string | boolean | string[]>, key: string): number | null | undefined {
   const value = stringFlag(flags, key);
   if (value === undefined) {
@@ -987,6 +995,44 @@ async function commandQuota(args: string[]): Promise<CliResult> {
   throw new Error("Usage: ward quota list [--limit <n>]");
 }
 
+async function commandWorkflow(args: string[]): Promise<CliResult> {
+  const [subcommand, taskId, ...rest] = args;
+  if (!subcommand || !taskId) {
+    throw new Error("Usage: ward workflow signal|qa <task-id> [...]");
+  }
+  const parsed = parseFlags(rest);
+  if (subcommand === "signal") {
+    const phase = stringFlag(parsed.flags, "phase");
+    if (!phase) {
+      throw new Error("Usage: ward workflow signal <task-id> --phase task|implement|simplify|test|document|ship|release");
+    }
+    const data = await apiRequest(`/api/tasks/${encodeURIComponent(taskId)}/signals`, {
+      method: "POST",
+      body: JSON.stringify({
+        phase,
+        status: stringFlag(parsed.flags, "status"),
+        summary: stringFlag(parsed.flags, "summary"),
+        artifacts: artifactFlags(parsed.flags),
+        risks: listFlag(parsed.flags, "risk"),
+        missing_evidence: listFlag(parsed.flags, "missing-evidence"),
+        next_recommended_agent: stringFlag(parsed.flags, "next") ?? undefined
+      })
+    });
+    return { ok: true, command: "workflow signal", timestamp: nowIso(), message: "WARD workflow signal recorded.", data };
+  }
+  if (subcommand === "qa") {
+    const data = await apiRequest(`/api/tasks/${encodeURIComponent(taskId)}/qa-review`, {
+      method: "POST",
+      body: JSON.stringify({
+        session_id: stringFlag(parsed.flags, "session"),
+        notes: stringFlag(parsed.flags, "notes")
+      })
+    });
+    return { ok: true, command: "workflow qa", timestamp: nowIso(), message: "WARD QA supervisor reviewed evidence.", data };
+  }
+  throw new Error("Usage: ward workflow signal|qa <task-id> [...]");
+}
+
 async function commandPlan(args: string[]): Promise<CliResult> {
   const [subcommand = "list", ...rest] = args;
 
@@ -1364,6 +1410,8 @@ async function dispatch(args: string[]): Promise<CliResult> {
       return commandCost(rest);
     case "quota":
       return commandQuota(rest);
+    case "workflow":
+      return commandWorkflow(rest);
     case "plan":
       return commandPlan(rest);
     case "handoff":
