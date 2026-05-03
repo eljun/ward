@@ -20,14 +20,10 @@
 
 ## In Progress
 
-- [ ] `8C` Brain Settings and Cost Dashboard
-  - Doc: [docs/task/008c-brain-settings-cost-dashboard.md](docs/task/008c-brain-settings-cost-dashboard.md)
-  - Goal: Make Brain Registry, routing, cost summary, forecast, and quota ledger visible/editable from Settings.
-
 - [ ] `8` Real Agent Adapters and Cost Ledger
   - Doc: [docs/task/008-real-agent-adapters.md](docs/task/008-real-agent-adapters.md)
   - Goal: Claude Code + Codex CLI adapters (subscription auth default); SDK / API / local opt-ins; full cost ledger with three accounting modes.
-  - Current slice: Settings UI for Brain Registry, routing, cost ledger, and quota visibility.
+  - Current slice: Workflow-skills bridge and QA Supervisor remain for Task 008 completion.
 
 ## Testing
 
@@ -166,8 +162,17 @@
 - Task 008A runtime-served UI root returns 200 and serves the orb/glassy Vite bundle.
 - Task 008B `/api/orb/chat` returns deterministic WARD replies for overview, session, memory, planning, workspace, and settings intents.
 - Task 008C Settings backing APIs return Brain Registry, cost forecast, cost summary, quota ledger, and persist brain enable/disable plus route updates.
+- Task 008D budget caps persist through `ward brain budget`, cost forecast reports cap limits, over-cap launches fall back to `stub-worker`, and no-fallback over-cap launches reject clearly.
 
 ## Done
+
+- [x] `8D` Brain Budget Caps and Fallback
+  - Doc: [docs/task/008d-brain-budget-caps-fallback.md](docs/task/008d-brain-budget-caps-fallback.md)
+  - Goal: Enforce per-brain daily invocation/dollar caps before launch and fall back through `budget_exceeded_fallback`.
+
+- [x] `8C` Brain Settings and Cost Dashboard
+  - Doc: [docs/task/008c-brain-settings-cost-dashboard.md](docs/task/008c-brain-settings-cost-dashboard.md)
+  - Goal: Make Brain Registry, routing, cost summary, forecast, and quota ledger visible/editable from Settings.
 
 - [x] `8B` Orb Chat Command Loop
   - Doc: [docs/task/008b-orb-chat-command-loop.md](docs/task/008b-orb-chat-command-loop.md)

@@ -1,6 +1,6 @@
 # Task 008C: Brain Settings and Cost Dashboard
 
-- Status: `in_progress`
+- Status: `done`
 - Type: `enhancement`
 - Version Impact: `minor`
 - Priority: `medium`

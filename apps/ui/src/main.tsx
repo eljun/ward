@@ -339,6 +339,22 @@ type CostForecast = {
   }>;
 };
 
+type BrainBudgetStatus = {
+  brain_id: string;
+  date: string;
+  limits: {
+    daily_invocations: number | null;
+    daily_dollars: number | null;
+  };
+  usage: {
+    invocations: number;
+    dollars_estimate: number;
+  };
+  exceeded: Array<"daily_invocations" | "daily_dollars">;
+  allowed: boolean;
+  fallback_brain_id: string | null;
+};
+
 type QuotaLedgerEntry = {
   id: string;
   policy_id: string;
@@ -734,6 +750,7 @@ function App() {
   const [brainRegistry, setBrainRegistry] = useState<BrainRegistry>({ brains: [], routing: [] });
   const [costSummary, setCostSummary] = useState<CostLedgerSummary | null>(null);
   const [costForecast, setCostForecast] = useState<CostForecast | null>(null);
+  const [brainBudgets, setBrainBudgets] = useState<BrainBudgetStatus[]>([]);
   const [quotaLedger, setQuotaLedger] = useState<QuotaLedgerEntry[]>([]);
   const [brainBusy, setBrainBusy] = useState("");
   const [activeView, setActiveView] = useState<CommandView>("overview");
@@ -772,6 +789,10 @@ function App() {
     () => new Map((costForecast?.forecasts ?? []).map((forecast) => [forecast.brain_id, forecast])),
     [costForecast?.forecasts]
   );
+  const budgetByBrain = useMemo(
+    () => new Map(brainBudgets.map((budget) => [budget.brain_id, budget])),
+    [brainBudgets]
+  );
   const latestSessionIssue = useMemo(
     () => [...(sessionDetail?.events ?? [])].reverse().find((event) => {
       const payload = asRecord(event.payload);
@@ -792,13 +813,15 @@ function App() {
   );
 
   async function refreshBrainSurface() {
-    const [brainResponse, costResponse, forecastResponse, quotaResponse] = await Promise.all([
+    const [brainResponse, budgetResponse, costResponse, forecastResponse, quotaResponse] = await Promise.all([
       api<{ registry: BrainRegistry }>("/api/brains"),
+      api<{ budgets: BrainBudgetStatus[] }>("/api/brains/budgets"),
       api<{ summary: CostLedgerSummary }>("/api/cost/today"),
       api<{ forecast: CostForecast }>("/api/cost/forecast"),
       api<{ ledger: QuotaLedgerEntry[] }>("/api/quota?limit=8")
     ]);
     setBrainRegistry(brainResponse.registry);
+    setBrainBudgets(budgetResponse.budgets);
     setCostSummary(costResponse.summary);
     setCostForecast(forecastResponse.forecast);
     setQuotaLedger(quotaResponse.ledger);
@@ -1049,6 +1072,27 @@ function App() {
         body: JSON.stringify({ brain_ids: brainIds })
       });
       setMessage(`${titleCase(concern)} route updated.`);
+      await refreshBrainSurface();
+    } finally {
+      setBrainBusy("");
+    }
+  }
+
+  async function saveBrainBudget(event: FormEvent<HTMLFormElement>, brainId: string) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const dailyInvocationsRaw = String(form.get("daily_invocations") ?? "").trim();
+    const dailyDollarsRaw = String(form.get("daily_dollars") ?? "").trim();
+    setBrainBusy(`budget:${brainId}`);
+    try {
+      await api(`/api/brains/${encodeURIComponent(brainId)}/budget`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          daily_invocations: dailyInvocationsRaw ? Number(dailyInvocationsRaw) : null,
+          daily_dollars: dailyDollarsRaw ? Number(dailyDollarsRaw) : null
+        })
+      });
+      setMessage(`${brainId} budget updated.`);
       await refreshBrainSurface();
     } finally {
       setBrainBusy("");
@@ -1709,6 +1753,7 @@ function App() {
             {brainRegistry.brains.map((brain) => {
               const cost = costByBrain.get(brain.id);
               const forecast = forecastByBrain.get(brain.id);
+              const budget = budgetByBrain.get(brain.id);
               return (
                 <div className={brain.enabled ? "brain-control active" : "brain-control"} key={brain.id}>
                   <div className="brain-control-head">
@@ -1732,7 +1777,21 @@ function App() {
                     <span>{formatDuration(cost?.duration_ms ?? 0)}</span>
                     <span>{formatDollars(cost?.dollars_estimate ?? 0)}</span>
                     <span>{forecast ? `${forecast.status} ${formatMetric(forecast.current, forecast.metric)}` : "forecast pending"}</span>
+                    <span>{budget?.allowed === false ? `over ${budget.exceeded.map(titleCase).join(" + ")}` : "within budget"}</span>
                   </div>
+                  <form className="budget-form" key={`${brain.id}-${budget?.limits.daily_invocations ?? "none"}-${budget?.limits.daily_dollars ?? "none"}`} onSubmit={(event) => saveBrainBudget(event, brain.id).catch((err) => setError(err.message))}>
+                    <label>
+                      Daily calls
+                      <input name="daily_invocations" type="number" min="1" step="1" placeholder="no cap" defaultValue={budget?.limits.daily_invocations ?? ""} />
+                    </label>
+                    <label>
+                      Daily $
+                      <input name="daily_dollars" type="number" min="0.0001" step="0.0001" placeholder="no cap" defaultValue={budget?.limits.daily_dollars ?? ""} />
+                    </label>
+                    <button type="submit" disabled={brainBusy === `budget:${brain.id}`}>
+                      {brainBusy === `budget:${brain.id}` ? "Saving..." : "Save Caps"}
+                    </button>
+                  </form>
                   <button
                     type="button"
                     disabled={brainBusy === `brain:${brain.id}`}

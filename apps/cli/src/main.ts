@@ -145,6 +145,21 @@ function numberFlag(flags: Record<string, string | boolean | string[]>, key: str
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function nullableNumberFlag(flags: Record<string, string | boolean | string[]>, key: string): number | null | undefined {
+  const value = stringFlag(flags, key);
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === "" || value === "clear" || value === "none" || value === "null") {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`Expected --${key} to be a positive number or clear`);
+  }
+  return parsed;
+}
+
 async function ensureRuntime(): Promise<void> {
   if (await healthFetch()) {
     return;
@@ -920,7 +935,32 @@ async function commandBrain(args: string[]): Promise<CliResult> {
     });
     return { ok: true, command: "brain route", timestamp: nowIso(), message: "WARD brain route updated.", data };
   }
-  throw new Error("Usage: ward brain list|enable|disable|route");
+  if (subcommand === "budget") {
+    const parsed = parseFlags(rest);
+    const [brainId] = parsed.positional;
+    if (!brainId) {
+      throw new Error("Usage: ward brain budget <brain-id> [--daily-invocations <n|clear>] [--daily-dollars <n|clear>]");
+    }
+    const dailyInvocations = nullableNumberFlag(parsed.flags, "daily-invocations");
+    const dailyDollars = nullableNumberFlag(parsed.flags, "daily-dollars");
+    if (dailyInvocations === undefined && dailyDollars === undefined) {
+      const data = await apiRequest(`/api/brains/${encodeURIComponent(brainId)}/budget`);
+      return { ok: true, command: "brain budget", timestamp: nowIso(), message: "WARD brain budget.", data };
+    }
+    const body: Record<string, number | null> = {};
+    if (dailyInvocations !== undefined) {
+      body.daily_invocations = dailyInvocations;
+    }
+    if (dailyDollars !== undefined) {
+      body.daily_dollars = dailyDollars;
+    }
+    const data = await apiRequest(`/api/brains/${encodeURIComponent(brainId)}/budget`, {
+      method: "PATCH",
+      body: JSON.stringify(body)
+    });
+    return { ok: true, command: "brain budget", timestamp: nowIso(), message: "WARD brain budget updated.", data };
+  }
+  throw new Error("Usage: ward brain list|enable|disable|route|budget");
 }
 
 async function commandCost(args: string[]): Promise<CliResult> {

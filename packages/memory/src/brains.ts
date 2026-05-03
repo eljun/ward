@@ -2,6 +2,9 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  BrainBudgetDecisionSchema,
+  BrainBudgetPatchSchema,
+  BrainBudgetStatusSchema,
   BrainConfigSchema,
   BrainRegistrySchema,
   BrainRouteSchema,
@@ -12,6 +15,9 @@ import {
   RecordCostLedgerEntrySchema,
   nowIso,
   type BrainAccounting,
+  type BrainBudgetDecision,
+  type BrainBudgetPatch,
+  type BrainBudgetStatus,
   type BrainConfig,
   type BrainRegistry,
   type BrainRoute,
@@ -55,6 +61,11 @@ type CostRow = Omit<CostLedgerEntry, "accounting_mode"> & {
 };
 
 type QuotaRow = QuotaLedgerEntry;
+
+type BrainUsageRow = {
+  invocations: number;
+  dollars_estimate: number;
+};
 
 function withDb<T>(fn: (db: Database, paths: WardPaths) => T): T {
   const paths = resolveWardPaths();
@@ -394,6 +405,127 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function budgetPreferenceKey(brainId: string, key: "daily_invocations" | "daily_dollars"): string {
+  return `brain.${brainId}.${key}`;
+}
+
+function readGlobalPreference(db: Database, key: string): unknown | null {
+  const row = db.query<{ value_json: string }, [string]>(`
+    SELECT value_json
+    FROM preference
+    WHERE scope = 'global'
+      AND workspace_id IS NULL
+      AND key = ?
+    ORDER BY updated_at DESC, id DESC
+    LIMIT 1
+  `).get(key);
+  if (!row) {
+    return null;
+  }
+  return JSON.parse(row.value_json);
+}
+
+function readPositiveNumberPreference(db: Database, key: string): number | null {
+  const value = readGlobalPreference(db, key);
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function writeGlobalPreference(db: Database, key: string, value: number | null): void {
+  db.query("DELETE FROM preference WHERE scope = 'global' AND workspace_id IS NULL AND key = ?").run(key);
+  if (value === null) {
+    return;
+  }
+  db.query(`
+    INSERT INTO preference (scope, workspace_id, key, value_json, source, confidence, updated_at)
+    VALUES ('global', NULL, ?, ?, 'user', 1, ?)
+  `).run(key, JSON.stringify(value), nowIso());
+}
+
+function readBrainBudgetLimits(db: Database, brainId: string): BrainBudgetStatus["limits"] {
+  return {
+    daily_invocations: readPositiveNumberPreference(db, budgetPreferenceKey(brainId, "daily_invocations")),
+    daily_dollars: readPositiveNumberPreference(db, budgetPreferenceKey(brainId, "daily_dollars"))
+  };
+}
+
+function readBrainUsage(db: Database, brainId: string, date: string): BrainUsageRow {
+  return db.query<BrainUsageRow, [string, string, string]>(`
+    SELECT
+      COALESCE(SUM(invocations), 0) AS invocations,
+      COALESCE(SUM(dollars_estimate), 0) AS dollars_estimate
+    FROM cost_ledger_entry
+    WHERE brain_id = ?
+      AND created_at >= ?
+      AND created_at < ?
+  `).get(brainId, `${date}T00:00:00.000Z`, `${date}T23:59:59.999Z`) ?? { invocations: 0, dollars_estimate: 0 };
+}
+
+function fallbackBrainIdFromDb(db: Database, excludedBrainId: string): string | null {
+  const row = db.query<RouteRow, [string]>("SELECT * FROM brain_route WHERE concern = ?").get("budget_exceeded_fallback");
+  if (!row) {
+    return null;
+  }
+  const route = routeFromRow(row);
+  for (const brainId of route.brain_ids) {
+    if (brainId === excludedBrainId) {
+      continue;
+    }
+    const brain = db.query<BrainRow, [string]>("SELECT * FROM brain_registry WHERE id = ?").get(brainId);
+    if (brain && brain.enabled) {
+      return brainId;
+    }
+  }
+  return null;
+}
+
+function brainBudgetStatusFromDb(db: Database, brainId: string, date = todayIso()): BrainBudgetStatus {
+  const brain = db.query<BrainRow, [string]>("SELECT * FROM brain_registry WHERE id = ?").get(brainId);
+  if (!brain) {
+    throw new Error(`Brain not found: ${brainId}`);
+  }
+  const limits = readBrainBudgetLimits(db, brainId);
+  const usage = readBrainUsage(db, brainId, date);
+  const exceeded: BrainBudgetStatus["exceeded"] = [];
+  if (limits.daily_invocations !== null && usage.invocations >= limits.daily_invocations) {
+    exceeded.push("daily_invocations");
+  }
+  if (limits.daily_dollars !== null && usage.dollars_estimate >= limits.daily_dollars) {
+    exceeded.push("daily_dollars");
+  }
+  return BrainBudgetStatusSchema.parse({
+    brain_id: brainId,
+    date,
+    limits,
+    usage,
+    exceeded,
+    allowed: exceeded.length === 0,
+    fallback_brain_id: fallbackBrainIdFromDb(db, brainId)
+  });
+}
+
+function selectBudgetFallback(db: Database, requestedBrainId: string, date = todayIso()): BrainBudgetStatus | null {
+  const row = db.query<RouteRow, [string]>("SELECT * FROM brain_route WHERE concern = ?").get("budget_exceeded_fallback");
+  if (!row) {
+    return null;
+  }
+  const route = routeFromRow(row);
+  for (const fallbackBrainId of route.brain_ids) {
+    if (fallbackBrainId === requestedBrainId) {
+      continue;
+    }
+    const brain = db.query<BrainRow, [string]>("SELECT * FROM brain_registry WHERE id = ?").get(fallbackBrainId);
+    if (!brain || !brain.enabled) {
+      continue;
+    }
+    const status = brainBudgetStatusFromDb(db, fallbackBrainId, date);
+    if (status.allowed) {
+      return status;
+    }
+  }
+  return null;
+}
+
 export function getCostLedgerToday(date = todayIso()): CostLedgerSummary {
   return withDb((db) => {
     const rows = db.query<{
@@ -449,9 +581,64 @@ export function listQuotaLedger(limit = 50): QuotaLedgerEntry[] {
   `).all(Math.max(1, Math.min(200, limit))).map(quotaFromRow));
 }
 
+export function getBrainBudgetStatus(brainId: string, date = todayIso()): BrainBudgetStatus {
+  return withDb((db) => brainBudgetStatusFromDb(db, brainId, date));
+}
+
+export function listBrainBudgetStatuses(date = todayIso()): BrainBudgetStatus[] {
+  return withDb((db) => db.query<BrainRow, []>("SELECT * FROM brain_registry ORDER BY enabled DESC, id ASC")
+    .all()
+    .map((brain) => brainBudgetStatusFromDb(db, brain.id, date)));
+}
+
+export function setBrainBudgetCaps(brainId: string, input: BrainBudgetPatch): BrainBudgetStatus {
+  const parsed = BrainBudgetPatchSchema.parse(input);
+  return withDb((db) => {
+    const brain = db.query<BrainRow, [string]>("SELECT * FROM brain_registry WHERE id = ?").get(brainId);
+    if (!brain) {
+      throw new Error(`Brain not found: ${brainId}`);
+    }
+    if ("daily_invocations" in parsed) {
+      writeGlobalPreference(db, budgetPreferenceKey(brainId, "daily_invocations"), parsed.daily_invocations ?? null);
+    }
+    if ("daily_dollars" in parsed) {
+      writeGlobalPreference(db, budgetPreferenceKey(brainId, "daily_dollars"), parsed.daily_dollars ?? null);
+    }
+    return brainBudgetStatusFromDb(db, brainId);
+  });
+}
+
+export function resolveBrainBudget(brainId: string, date = todayIso()): BrainBudgetDecision {
+  return withDb((db) => {
+    const status = brainBudgetStatusFromDb(db, brainId, date);
+    if (status.allowed) {
+      return BrainBudgetDecisionSchema.parse({
+        requested_brain_id: brainId,
+        selected_brain_id: brainId,
+        fallback_used: false,
+        reason: "within_budget",
+        status,
+        fallback_status: null
+      });
+    }
+    const fallbackStatus = selectBudgetFallback(db, brainId, date);
+    return BrainBudgetDecisionSchema.parse({
+      requested_brain_id: brainId,
+      selected_brain_id: fallbackStatus?.brain_id ?? brainId,
+      fallback_used: Boolean(fallbackStatus),
+      reason: fallbackStatus
+        ? `budget_exceeded:${status.exceeded.join(",")};fallback:${fallbackStatus.brain_id}`
+        : `budget_exceeded:${status.exceeded.join(",")};fallback:unavailable`,
+      status,
+      fallback_status: fallbackStatus
+    });
+  });
+}
+
 export function getCostForecast(): CostForecast {
   const summary = getCostLedgerToday();
   const registry = getBrainRegistry();
+  const budgets = listBrainBudgetStatuses(summary.date);
   const generatedAt = nowIso();
   return CostForecastSchema.parse({
     generated_at: generatedAt,
@@ -459,13 +646,15 @@ export function getCostForecast(): CostForecast {
       const row = summary.by_brain.find((item) => item.brain_id === brain.id);
       const metric = brain.accounting === "api" ? "dollars" : "invocations";
       const current = metric === "dollars" ? row?.dollars_estimate ?? 0 : row?.invocations ?? 0;
+      const budget = budgets.find((item) => item.brain_id === brain.id);
+      const limit = metric === "dollars" ? budget?.limits.daily_dollars ?? null : budget?.limits.daily_invocations ?? null;
       return {
         brain_id: brain.id,
         metric,
         current,
-        limit: null,
-        projected_breach_at: null,
-        status: "unknown"
+        limit,
+        projected_breach_at: limit !== null && current >= limit ? generatedAt : null,
+        status: limit === null ? "unknown" : current >= limit * 0.8 ? "watch" : "ok"
       };
     })
   });

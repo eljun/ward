@@ -877,6 +877,22 @@ h2 {
   background: rgba(255, 255, 255, 0.58);
 }
 
+.budget-form {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) minmax(110px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.budget-form input {
+  min-height: 34px;
+}
+
+.budget-form button {
+  min-height: 34px;
+  padding-inline: 10px;
+}
+
 .route-row {
   display: grid;
   grid-template-columns: minmax(180px, 0.75fr) minmax(220px, 1fr) auto;
@@ -1248,6 +1264,7 @@ h2 {
     .session-status-strip,
     .route-row,
     .cost-metrics,
+    .budget-form,
     .brief-panel .actions,
     .round-rail,
     .packet-columns,

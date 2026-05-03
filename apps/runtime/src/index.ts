@@ -4,6 +4,7 @@ import { extname, join, normalize } from "node:path";
 import {
   AddArtifactSchema,
   AppendWikiPageSchema,
+  BrainBudgetPatchSchema,
   CreateTaskSchema,
   CreateWorkspaceSchema,
   OpenGateSchema,
@@ -57,6 +58,7 @@ import {
   getWorkspaceDetail,
   generateTasksFromPlan,
   getBrain,
+  getBrainBudgetStatus,
   getBrainRegistry,
   getCostForecast,
   getCostLedgerToday,
@@ -69,6 +71,7 @@ import {
   lintWiki,
   listHarnessQueue,
   listHarnessSessions,
+  listBrainBudgetStatuses,
   listQuotaLedger,
   listWikiPages,
   listPreferences,
@@ -101,6 +104,7 @@ import {
   revisePlan,
   startPlanMode,
   setBrainEnabled,
+  setBrainBudgetCaps,
   setBrainRoute,
   transitionHarnessSession,
   transitionTask,
@@ -624,6 +628,18 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
 
     if (parts[0] === "brains" && req.method === "GET" && !parts[1]) {
       return json({ ok: true, registry: getBrainRegistry() });
+    }
+
+    if (parts[0] === "brains" && parts[1] === "budgets" && req.method === "GET") {
+      return json({ ok: true, budgets: listBrainBudgetStatuses(url.searchParams.get("date") ?? undefined) });
+    }
+
+    if (parts[0] === "brains" && parts[1] && parts[2] === "budget" && req.method === "GET") {
+      return json({ ok: true, budget: getBrainBudgetStatus(parts[1], url.searchParams.get("date") ?? undefined) });
+    }
+
+    if (parts[0] === "brains" && parts[1] && parts[2] === "budget" && req.method === "PATCH") {
+      return json({ ok: true, budget: setBrainBudgetCaps(parts[1], BrainBudgetPatchSchema.parse(await readJson(req))) });
     }
 
     if (parts[0] === "brains" && parts[1] && (parts[2] === "enable" || parts[2] === "disable") && req.method === "POST") {

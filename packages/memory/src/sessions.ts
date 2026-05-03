@@ -28,7 +28,7 @@ import type { Database } from "bun:sqlite";
 import { ensureWardLayout, resolveWardPaths, type WardPaths } from "./layout.ts";
 import { openWardDatabase } from "./migrations.ts";
 import { ensureMemoryBootstrap } from "./wiki.ts";
-import { getBrain } from "./brains.ts";
+import { getBrain, resolveBrainBudget } from "./brains.ts";
 
 type WorkspaceRow = {
   id: number;
@@ -391,14 +391,19 @@ export async function prepareHarnessLaunch(input: unknown): Promise<{ session: H
   return withDbAsync(async (db, paths) => {
     await ensureWardLayout(paths);
     await ensureMemoryBootstrap(paths);
-    const brain = getBrain(parsed.brain_id);
+    const budgetDecision = resolveBrainBudget(parsed.brain_id);
+    if (!budgetDecision.status.allowed && !budgetDecision.fallback_used) {
+      throw new Error(`Brain budget exceeded for ${parsed.brain_id}: ${budgetDecision.status.exceeded.join(", ")}`);
+    }
+    const selectedBrainId = budgetDecision.selected_brain_id;
+    const brain = getBrain(selectedBrainId);
     if (!brain) {
-      throw new Error(`Brain not found: ${parsed.brain_id}`);
+      throw new Error(`Brain not found: ${selectedBrainId}`);
     }
     if (!brain.enabled) {
-      throw new Error(`Brain is disabled: ${parsed.brain_id}`);
+      throw new Error(`Brain is disabled: ${selectedBrainId}`);
     }
-    const runtimeKind = runtimeKindForBrain(parsed.brain_id, parsed.runtime_kind, runtimeExplicit);
+    const runtimeKind = runtimeKindForBrain(selectedBrainId, parsed.runtime_kind, runtimeExplicit);
 
     const workspace = workspaceBySlug(db, parsed.workspace_slug);
     const task = parsed.task_id ? taskById(db, parsed.task_id) : null;
@@ -430,7 +435,7 @@ export async function prepareHarnessLaunch(input: unknown): Promise<{ session: H
       session_id: sessionId,
       workspace_id: workspace.id,
       task_id: task?.id ?? null,
-      brain_id: parsed.brain_id,
+      brain_id: selectedBrainId,
       runtime_kind: runtimeKind,
       mode: parsed.mode,
       working_dir: workingDir,
@@ -461,7 +466,7 @@ export async function prepareHarnessLaunch(input: unknown): Promise<{ session: H
       sessionId,
       workspace.id,
       task?.id ?? null,
-      parsed.brain_id,
+      selectedBrainId,
       runtimeKind,
       parsed.mode,
       workingDir,
@@ -492,7 +497,11 @@ export async function prepareHarnessLaunch(input: unknown): Promise<{ session: H
       session_id: session.id,
       source: "runtime",
       payload: {
-        brain_id: parsed.brain_id,
+        brain_id: selectedBrainId,
+        requested_brain_id: parsed.brain_id,
+        budget_fallback_used: budgetDecision.fallback_used,
+        budget_reason: budgetDecision.reason,
+        budget_exceeded: budgetDecision.status.exceeded,
         runtime_kind: runtimeKind,
         mode: parsed.mode,
         scenario: parsed.scenario

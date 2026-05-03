@@ -148,3 +148,36 @@ export const CostForecastSchema = z.object({
   }))
 });
 export type CostForecast = z.infer<typeof CostForecastSchema>;
+
+export const BrainBudgetPatchSchema = z.object({
+  daily_invocations: z.number().int().positive().nullable().optional(),
+  daily_dollars: z.number().positive().nullable().optional()
+});
+export type BrainBudgetPatch = z.infer<typeof BrainBudgetPatchSchema>;
+
+export const BrainBudgetStatusSchema = z.object({
+  brain_id: z.string(),
+  date: z.string(),
+  limits: z.object({
+    daily_invocations: z.number().int().positive().nullable(),
+    daily_dollars: z.number().positive().nullable()
+  }),
+  usage: z.object({
+    invocations: z.number().int().nonnegative(),
+    dollars_estimate: z.number().nonnegative()
+  }),
+  exceeded: z.array(z.enum(["daily_invocations", "daily_dollars"])),
+  allowed: z.boolean(),
+  fallback_brain_id: z.string().nullable()
+});
+export type BrainBudgetStatus = z.infer<typeof BrainBudgetStatusSchema>;
+
+export const BrainBudgetDecisionSchema = z.object({
+  requested_brain_id: z.string(),
+  selected_brain_id: z.string(),
+  fallback_used: z.boolean(),
+  reason: z.string(),
+  status: BrainBudgetStatusSchema,
+  fallback_status: BrainBudgetStatusSchema.nullable()
+});
+export type BrainBudgetDecision = z.infer<typeof BrainBudgetDecisionSchema>;

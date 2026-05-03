@@ -340,6 +340,57 @@ compact signals and hard-memory artifacts.
   - `/api/cost/forecast`
   - `/api/quota?limit=8`
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json down` - PASS
+
+### Budget Caps and Fallback Slice
+
+#### What Changed
+
+- Added per-brain daily invocation and dollar caps stored as global
+  preferences.
+- Added budget status, cap update, and fallback decision helpers in the Brain
+  Registry memory layer.
+- Added runtime and CLI surfaces for `ward brain budget`.
+- Added Settings cap inputs for each registered brain.
+- Updated cost forecast so configured caps appear as limits and warn when
+  current usage reaches the cap.
+- Updated harness launch preparation so over-cap brains fall back through
+  `budget_exceeded_fallback` before a session is queued.
+- Added session-created event payload fields for requested brain, selected
+  brain, fallback usage, reason, and exceeded cap names.
+
+#### Files Changed
+
+- `packages/core/src/brains/index.ts` - Adds budget patch/status/decision
+  schemas.
+- `packages/memory/src/brains.ts` - Adds budget cap persistence, status,
+  forecast limits, and fallback resolution.
+- `packages/memory/src/sessions.ts` - Applies budget resolution before queueing
+  harness sessions.
+- `apps/runtime/src/index.ts` - Adds budget API routes.
+- `apps/cli/src/main.ts` - Adds `ward brain budget`.
+- `apps/ui/src/main.tsx` - Adds Settings budget status and cap forms.
+- `apps/ui/src/styles.css` - Adds budget form layout.
+- `docs/task/008d-brain-budget-caps-fallback.md` - Documents the slice.
+- `TASKS.md` - Tracks Task 008D verification.
+
+#### Deviations From Plan
+
+- Forecast breach time is conservative in this slice: when usage is already at
+  or above the cap, it reports the current generated time. A richer burn-rate
+  projection can land once there is enough history for trends.
+
+#### Verification Run
+
+- `bun run build` - PASS
+- `git diff --check` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json up` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json brain budget claude-code-cli --daily-invocations 1` - PASS
+- synthetic cost entry recorded for `claude-code-cli` - PASS
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json brain budget claude-code-cli` - PASS (`allowed: false`)
+- `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json cost forecast` - PASS (`limit: 1`, `status: watch`)
+- over-cap `claude-code-cli` launch fell back to `stub-worker` before queuing - PASS
+- no-fallback over-cap launch rejected with `Brain budget exceeded...` - PASS
+- cap reset and `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json down` - PASS
 - `bun test` - FAIL (no test files exist in the repo yet)
 - `WARD_HOME=/tmp/ward-task008-smoke bun run ward --json doctor` - PASS
   (`claude_auth` logged in via `claude.ai`; `codex_auth` logged in using
