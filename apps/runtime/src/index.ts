@@ -55,12 +55,14 @@ import {
   getWorkspaceByIdOrSlug,
   getWorkspaceDetail,
   generateTasksFromPlan,
+  claimReadyHarnessSessions,
   getHarnessSession,
   getHarnessSessionDetail,
   ingestAttachmentBuffer,
   ingestAttachmentFromPath,
   isPortAvailable,
   lintWiki,
+  listHarnessQueue,
   listHarnessSessions,
   listWikiPages,
   listPreferences,
@@ -85,8 +87,10 @@ import {
   searchMemory,
   setPreference,
   setHarnessWorkerPid,
+  markHarnessQueueTerminal,
   refreshWorkspaceSnapshots,
   finalizeHarnessSession,
+  revertHarnessSession,
   revisePlan,
   startPlanMode,
   transitionHarnessSession,
@@ -100,8 +104,12 @@ import {
 } from "@ward/memory";
 
 const HOST = "127.0.0.1";
+const GLOBAL_HARNESS_CAP = Number(process.env.WARD_HARNESS_GLOBAL_CAP ?? "2");
 const stubHarness = new StubHarnessAdapter();
 const activeHarnesses = new Map<string, RunningHarness>();
+const sessionEventSubscribers = new Map<string, Set<(event: unknown) => void>>();
+const terminalSubscribers = new Map<string, Set<(data: string) => void>>();
+let queueDraining = false;
 
 function contentType(pathname: string): string {
   switch (extname(pathname)) {
@@ -153,7 +161,7 @@ function asHarnessState(value: unknown): HarnessLifecycleState | null {
 
 async function consumeHarness(run: RunningHarness): Promise<void> {
   for await (const event of run.events()) {
-    await appendHarnessEvent(run.sessionId, event);
+    await publishHarnessEvent(run.sessionId, event);
     if (event.event_type === "worker.status") {
       const payload = event.payload as { state?: unknown; detail?: unknown };
       const nextState = asHarnessState(payload.state);
@@ -182,6 +190,7 @@ async function consumeHarness(run: RunningHarness): Promise<void> {
           ? "Harness session blocked."
           : "Stub harness session failed.";
     await finalizeHarnessSession(run.sessionId, current.lifecycle_state as "done" | "failed" | "blocked" | "canceled", fallbackSummary);
+    void drainHarnessQueue();
     return;
   }
 
@@ -190,19 +199,78 @@ async function consumeHarness(run: RunningHarness): Promise<void> {
     ? "Stub harness session completed."
     : `Stub harness session failed with exit code ${exit.exitCode ?? "unknown"}.`;
   await finalizeHarnessSession(run.sessionId, nextState, summary);
+  void drainHarnessQueue();
+}
+
+async function publishHarnessEvent(sessionId: string, event: unknown): Promise<void> {
+  await appendHarnessEvent(sessionId, event as Parameters<typeof appendHarnessEvent>[1]);
+  const subscribers = sessionEventSubscribers.get(sessionId);
+  if (subscribers) {
+    for (const send of subscribers) {
+      send(event);
+    }
+  }
+  const payload = (event as { event_type?: string; payload?: unknown }).payload as { data?: unknown } | undefined;
+  if ((event as { event_type?: string }).event_type === "worker.terminal" && typeof payload?.data === "string") {
+    const terminal = terminalSubscribers.get(sessionId);
+    if (terminal) {
+      for (const send of terminal) {
+        send(payload.data);
+      }
+    }
+  }
+}
+
+async function startClaimedHarnessSession(sessionId: string): Promise<void> {
+  const detail = await getHarnessSessionDetail(sessionId);
+  const run = await stubHarness.launch(detail.launch);
+  activeHarnesses.set(sessionId, run);
+  setHarnessWorkerPid(sessionId, run.pid);
+  await transitionHarnessSession(sessionId, "initializing", "Stub harness spawned.");
+  const session = getHarnessSession(sessionId);
+  await publishHarnessEvent(sessionId, createEvent({
+    event_type: "agent.invoked",
+    trace_id: session.trace_id ?? createTraceId("session"),
+    workspace_id: session.workspace_id,
+    session_id: sessionId,
+    source: "orchestrator",
+    payload: {
+      brain_id: session.brain_id,
+      runtime_kind: session.runtime_kind,
+      mode: session.mode
+    }
+  }));
+  void consumeHarness(run).catch(async (error) => {
+    activeHarnesses.delete(sessionId);
+    setHarnessWorkerPid(sessionId, null);
+    await finalizeHarnessSession(sessionId, "failed", error instanceof Error ? error.message : String(error));
+    void drainHarnessQueue();
+  });
+}
+
+async function drainHarnessQueue(): Promise<void> {
+  if (queueDraining) {
+    return;
+  }
+  queueDraining = true;
+  try {
+    while (activeHarnesses.size < GLOBAL_HARNESS_CAP) {
+      const claimed = claimReadyHarnessSessions(GLOBAL_HARNESS_CAP, [...activeHarnesses.keys()]);
+      if (claimed.length === 0) {
+        break;
+      }
+      for (const session of claimed) {
+        await startClaimedHarnessSession(session.id);
+      }
+    }
+  } finally {
+    queueDraining = false;
+  }
 }
 
 async function launchHarnessSession(body: unknown): Promise<Awaited<ReturnType<typeof getHarnessSessionDetail>>> {
   const prepared = await prepareHarnessLaunch(LaunchSessionSchema.parse(body));
-  const run = await stubHarness.launch(prepared.launch);
-  activeHarnesses.set(prepared.session.id, run);
-  setHarnessWorkerPid(prepared.session.id, run.pid);
-  await transitionHarnessSession(prepared.session.id, "initializing", "Stub harness spawned.");
-  void consumeHarness(run).catch(async (error) => {
-    activeHarnesses.delete(prepared.session.id);
-    setHarnessWorkerPid(prepared.session.id, null);
-    await finalizeHarnessSession(prepared.session.id, "failed", error instanceof Error ? error.message : String(error));
-  });
+  await drainHarnessQueue();
   return getHarnessSessionDetail(prepared.session.id);
 }
 
@@ -213,7 +281,75 @@ async function cancelHarnessSession(sessionId: string): Promise<Awaited<ReturnTy
     activeHarnesses.delete(sessionId);
   }
   await finalizeHarnessSession(sessionId, "canceled", "Harness session canceled by user.");
+  markHarnessQueueTerminal(sessionId, "canceled");
+  void drainHarnessQueue();
   return getHarnessSessionDetail(sessionId);
+}
+
+function sse(data: unknown): string {
+  const eventType = typeof data === "object" && data && "event_type" in data ? String((data as { event_type: unknown }).event_type) : "message";
+  return `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+async function streamSessionEvents(sessionId: string): Promise<Response> {
+  const detail = await getHarnessSessionDetail(sessionId);
+  const encoder = new TextEncoder();
+  let cleanup = () => undefined;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      let lastCoalescedAt = 0;
+      let pending: unknown | null = null;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const sendNow = (event: unknown) => controller.enqueue(encoder.encode(sse(event)));
+      const flush = () => {
+        if (pending) {
+          sendNow(pending);
+          pending = null;
+          lastCoalescedAt = Date.now();
+        }
+        timer = null;
+      };
+      const send = (event: unknown) => {
+        const type = (event as { event_type?: string }).event_type;
+        if (type === "worker.message" || type === "worker.terminal" || type === "fs.file_written") {
+          const elapsed = Date.now() - lastCoalescedAt;
+          if (elapsed < 33) {
+            pending = event;
+            if (!timer) {
+              timer = setTimeout(flush, 33 - elapsed);
+            }
+            return;
+          }
+          lastCoalescedAt = Date.now();
+        }
+        sendNow(event);
+      };
+      for (const event of detail.events) {
+        sendNow(event);
+      }
+      const subscribers = sessionEventSubscribers.get(sessionId) ?? new Set<(event: unknown) => void>();
+      subscribers.add(send);
+      sessionEventSubscribers.set(sessionId, subscribers);
+      const heartbeat = setInterval(() => controller.enqueue(encoder.encode(": keepalive\n\n")), 15000);
+      cleanup = () => {
+        clearInterval(heartbeat);
+        if (timer) {
+          clearTimeout(timer);
+        }
+        subscribers.delete(send);
+      };
+    },
+    cancel() {
+      cleanup();
+    }
+  });
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache",
+      connection: "keep-alive"
+    }
+  });
 }
 
 async function authenticated(req: Request): Promise<boolean> {
@@ -357,6 +493,16 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
       });
     }
 
+    if (parts[0] === "queue" && req.method === "GET") {
+      return json({
+        ok: true,
+        queue: listHarnessQueue({
+          workspace: url.searchParams.get("workspace") ?? undefined,
+          include_incognito: url.searchParams.get("include_incognito") === "true"
+        })
+      });
+    }
+
     if (parts[0] === "sessions" && req.method === "POST" && !parts[1]) {
       return json({ ok: true, detail: await launchHarnessSession(await readJson(req)) }, 201);
     }
@@ -369,8 +515,33 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
       return json({ ok: true, detail: await getHarnessSessionDetail(parts[1]) });
     }
 
+    if (parts[0] === "sessions" && parts[1] && parts[2] === "events" && req.method === "GET") {
+      return await streamSessionEvents(parts[1]);
+    }
+
     if (parts[0] === "sessions" && parts[1] && parts[2] === "cancel" && req.method === "POST") {
       return json({ ok: true, detail: await cancelHarnessSession(parts[1]) });
+    }
+
+    if (parts[0] === "sessions" && parts[1] && parts[2] === "revert" && req.method === "POST") {
+      return json({ ok: true, detail: await revertHarnessSession(parts[1]) });
+    }
+
+    if (parts[0] === "sessions" && parts[1] && parts[2] === "answer-intervention" && req.method === "POST") {
+      const body = await readJson(req) as { decision?: string; note?: string };
+      const session = getHarnessSession(parts[1]);
+      await publishHarnessEvent(parts[1], createEvent({
+        event_type: "intervention.answered",
+        trace_id: session.trace_id ?? createTraceId("session"),
+        workspace_id: session.workspace_id,
+        session_id: parts[1],
+        source: "user",
+        payload: {
+          decision: body.decision ?? "noted",
+          note: body.note ?? null
+        }
+      }));
+      return json({ ok: true, detail: await getHarnessSessionDetail(parts[1]) });
     }
 
     if (parts[0] === "plan" && req.method === "GET" && !parts[1]) {
@@ -650,8 +821,14 @@ export async function startRuntime(): Promise<void> {
     port,
     async fetch(req, srv) {
       const url = new URL(req.url);
-      if (url.pathname === "/ws/pty") {
-        if (srv.upgrade(req, { data: null })) {
+      const ptyMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/pty$/);
+      if (ptyMatch) {
+        const paths = resolveWardPaths();
+        const token = await readDeviceToken(paths);
+        if (!(await authenticated(req)) && url.searchParams.get("token") !== token) {
+          return json({ ok: false, error: "Unauthorized" }, 401);
+        }
+        if (srv.upgrade(req, { data: { sessionId: decodeURIComponent(ptyMatch[1]) } })) {
           return undefined;
         }
         return new Response("WebSocket upgrade failed", { status: 400 });
@@ -663,11 +840,40 @@ export async function startRuntime(): Promise<void> {
     },
     websocket: {
       open(ws) {
-        ws.send(JSON.stringify({ type: "ward.pty_stub", message: "PTY streams land in Task 007." }));
-        ws.close(1000, "PTY stub only");
+        const data = ws.data as { sessionId?: string; cleanup?: () => void } | null;
+        const sessionId = data?.sessionId;
+        if (!sessionId) {
+          ws.close(1008, "Missing session id");
+          return;
+        }
+        void getHarnessSessionDetail(sessionId)
+          .then((detail) => {
+            if (detail.pty_output) {
+              ws.send(detail.pty_output);
+            }
+          })
+          .catch((error) => ws.send(`WARD PTY error: ${error instanceof Error ? error.message : String(error)}\n`));
+        const subscribers = terminalSubscribers.get(sessionId) ?? new Set<(data: string) => void>();
+        const send = (chunk: string) => ws.send(chunk);
+        subscribers.add(send);
+        terminalSubscribers.set(sessionId, subscribers);
+        if (data) {
+          data.cleanup = () => subscribers.delete(send);
+        }
       },
-      message() {
-        // Task 002 only verifies that the WebSocket route exists.
+      message(ws, message) {
+        const data = ws.data as { sessionId?: string } | null;
+        const sessionId = data?.sessionId;
+        const run = sessionId ? activeHarnesses.get(sessionId) : null;
+        if (!sessionId || !run) {
+          ws.send("WARD PTY is not attached to a running session.\n");
+          return;
+        }
+        void run.write(String(message));
+      },
+      close(ws) {
+        const data = ws.data as { cleanup?: () => void } | null;
+        data?.cleanup?.();
       }
     }
   });
@@ -687,6 +893,7 @@ export async function startRuntime(): Promise<void> {
     pid: process.pid,
     recovered_sessions: recoveredSessions.length
   });
+  void drainHarnessQueue();
 }
 
 if (import.meta.main) {

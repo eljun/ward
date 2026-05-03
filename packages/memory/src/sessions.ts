@@ -1,5 +1,5 @@
-import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { appendFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { join, relative, resolve } from "node:path";
 import {
   ContextPacketSchema,
   HarnessLaunchSchema,
@@ -73,6 +73,7 @@ type SessionRow = {
   mode: string | null;
   lifecycle_state: string | null;
   queue_state: string | null;
+  queue_position: number | null;
   working_dir: string | null;
   summary: string | null;
   incognito: number;
@@ -141,6 +142,7 @@ function sessionFromRow(row: SessionRow): HarnessSession {
     mode: row.mode,
     lifecycle_state: row.lifecycle_state,
     queue_state: row.queue_state,
+    queue_position: row.queue_position,
     working_dir: row.working_dir,
     summary: row.summary,
     incognito: Boolean(row.incognito),
@@ -285,6 +287,7 @@ async function ensureSessionFiles(paths: HarnessSessionPaths, launch: HarnessLau
     generated_at: launch.created_at
   }, null, 2), "utf8");
   await writeFile(paths.events_path, "", "utf8");
+  await writeFile(paths.pty_raw_path, "", "utf8");
 }
 
 async function readLaunchFromFiles(session: HarnessSession, paths: HarnessSessionPaths): Promise<HarnessLaunch> {
@@ -337,6 +340,7 @@ function sessionRowQuery(): string {
       session.mode,
       session.lifecycle_state,
       session.queue_state,
+      queue_entry.position AS queue_position,
       session.working_dir,
       session.summary,
       session.incognito,
@@ -349,6 +353,7 @@ function sessionRowQuery(): string {
     FROM session
     LEFT JOIN workspace ON workspace.id = session.workspace_id
     LEFT JOIN task ON task.id = session.task_id
+    LEFT JOIN queue_entry ON queue_entry.session_id = session.id
   `;
 }
 
@@ -418,7 +423,7 @@ export async function prepareHarnessLaunch(input: LaunchSessionInput): Promise<{
         queue_state, working_dir, summary, incognito, worker_pid, trace_id, scenario,
         started_at, ended_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, NULL, ?, ?, ?, NULL, ?)
+      VALUES (?, ?, ?, ?, ?, ?, NULL, 'queued', ?, NULL, ?, NULL, ?, ?, ?, NULL, ?)
     `).run(
       sessionId,
       workspace.id,
@@ -433,6 +438,18 @@ export async function prepareHarnessLaunch(input: LaunchSessionInput): Promise<{
       createdAt,
       createdAt
     );
+    const position = (db.query<{ position: number | null }, [number]>(`
+      SELECT MAX(position) AS position
+      FROM queue_entry
+      WHERE workspace_id = ?
+    `).get(workspace.id)?.position ?? 0) + 1;
+    db.query(`
+      INSERT INTO queue_entry (
+        id, workspace_id, session_id, queue_scope, position, status, created_at,
+        started_at, finished_at
+      )
+      VALUES (?, ?, ?, ?, ?, 'queued', ?, NULL, NULL)
+    `).run(id("queue"), workspace.id, sessionId, `workspace:${workspace.id}`, position, createdAt);
 
     const session = getHarnessSession(sessionId);
     await appendHarnessEvent(session.id, createEvent({
@@ -450,6 +467,80 @@ export async function prepareHarnessLaunch(input: LaunchSessionInput): Promise<{
     }));
     await transitionHarnessSession(session.id, "queued", "Session created and awaiting launch.");
     return { session: getHarnessSession(sessionId), launch, paths: filePaths };
+  });
+}
+
+export function listHarnessQueue(filters: Partial<SessionListFilters> = {}): HarnessSession[] {
+  const parsed = SessionListFiltersSchema.parse(filters);
+  return withDb((db) => {
+    const clauses: string[] = [harnessSessionClause(), "queue_entry.status IN ('queued', 'running')"];
+    const params: Array<string | number> = [];
+    if (parsed.workspace) {
+      clauses.push("(workspace.slug = ? OR CAST(workspace.id AS TEXT) = ?)");
+      params.push(parsed.workspace, parsed.workspace);
+    }
+    if (!parsed.include_incognito) {
+      clauses.push("COALESCE(session.incognito, 0) = 0");
+    }
+    return db.query<SessionRow, Array<string | number>>(`
+      ${sessionRowQuery()}
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY queue_entry.status DESC, queue_entry.position ASC, queue_entry.created_at ASC
+    `).all(...params).map(sessionFromRow);
+  });
+}
+
+export function claimReadyHarnessSessions(maxGlobalRunning: number, activeSessionIds: string[]): HarnessSession[] {
+  return withDb((db) => {
+    const activeSet = new Set(activeSessionIds);
+    const running = db.query<{ session_id: string; workspace_id: number }, []>(`
+      SELECT queue_entry.session_id, queue_entry.workspace_id
+      FROM queue_entry
+      JOIN session ON session.id = queue_entry.session_id
+      WHERE queue_entry.status = 'running'
+        AND session.lifecycle_state NOT IN ('done', 'failed', 'blocked', 'canceled')
+    `).all().filter((row) => activeSet.size === 0 || activeSet.has(row.session_id));
+    const activeWorkspaces = new Set(running.map((row) => row.workspace_id));
+    let capacity = Math.max(0, maxGlobalRunning - running.length);
+    if (capacity === 0) {
+      return [];
+    }
+
+    const candidates = db.query<SessionRow, []>(`
+      ${sessionRowQuery()}
+      WHERE ${harnessSessionClause()}
+        AND queue_entry.status = 'queued'
+        AND session.lifecycle_state = 'queued'
+      ORDER BY queue_entry.position ASC, queue_entry.created_at ASC
+    `).all();
+    const claimed: HarnessSession[] = [];
+    const timestamp = nowIso();
+    for (const row of candidates) {
+      if (capacity === 0) {
+        break;
+      }
+      if (!row.workspace_id || activeWorkspaces.has(row.workspace_id)) {
+        continue;
+      }
+      db.query("UPDATE queue_entry SET status = 'running', started_at = COALESCE(started_at, ?) WHERE session_id = ?")
+        .run(timestamp, row.id);
+      db.query("UPDATE session SET queue_state = 'running', updated_at = ? WHERE id = ?")
+        .run(timestamp, row.id);
+      activeWorkspaces.add(row.workspace_id);
+      capacity -= 1;
+      claimed.push(sessionFromRow({ ...row, queue_state: "running" }));
+    }
+    return claimed;
+  });
+}
+
+export function markHarnessQueueTerminal(sessionId: string, status: "finished" | "failed" | "blocked" | "canceled"): void {
+  withDb((db) => {
+    const timestamp = nowIso();
+    db.query("UPDATE queue_entry SET status = ?, finished_at = COALESCE(finished_at, ?) WHERE session_id = ?")
+      .run(status, timestamp, sessionId);
+    db.query("UPDATE session SET queue_state = ?, worker_pid = NULL, updated_at = ? WHERE id = ?")
+      .run(status, timestamp, sessionId);
   });
 }
 
@@ -500,12 +591,14 @@ export async function getHarnessSessionDetail(sessionId: string): Promise<Harnes
     ORDER BY created_at ASC
   `).all(sessionId).map((row) => parseStoredEvent(row, session)));
   const artifacts = await readdir(paths.artifacts_dir).catch(() => []);
+  const ptyOutput = await readFile(paths.pty_raw_path, "utf8").catch(() => "");
   return HarnessSessionDetailSchema.parse({
     session,
     launch,
     paths,
     events,
-    artifacts: artifacts.map((name) => join(paths.artifacts_dir, name))
+    artifacts: artifacts.map((name) => join(paths.artifacts_dir, name)),
+    pty_output: ptyOutput
   });
 }
 
@@ -513,6 +606,12 @@ export async function appendHarnessEvent(sessionId: string, event: WardEvent): P
   const session = getHarnessSession(sessionId);
   const paths = sessionPaths(resolveWardPaths(), sessionId);
   await appendFile(paths.events_path, `${JSON.stringify(event)}\n`, "utf8");
+  if (event.event_type === "worker.terminal") {
+    const payload = event.payload as { data?: unknown };
+    if (typeof payload.data === "string") {
+      await appendFile(paths.pty_raw_path, payload.data, "utf8");
+    }
+  }
   withDb((db) => {
     db.query(`
       INSERT INTO session_event (id, session_id, event_type, trace_id, payload_json, created_at)
@@ -571,6 +670,7 @@ export async function finalizeHarnessSession(sessionId: string, nextState: Extra
     db.query("UPDATE session SET summary = ?, ended_at = COALESCE(ended_at, ?), updated_at = ? WHERE id = ?")
       .run(summary, nowIso(), nowIso(), sessionId);
   });
+  markHarnessQueueTerminal(sessionId, nextState === "done" ? "finished" : nextState);
   return getHarnessSession(sessionId);
 }
 
@@ -593,13 +693,46 @@ export async function recoverInterruptedHarnessSessions(): Promise<HarnessSessio
 
   const recovered: HarnessSession[] = [];
   for (const session of staleSessions) {
-    await transitionHarnessSession(
+    await finalizeHarnessSession(
       session.id,
       "blocked",
       "Runtime restarted before this stub harness could be reattached."
     );
-    setHarnessWorkerPid(session.id, null);
     recovered.push(getHarnessSession(session.id));
   }
   return recovered;
+}
+
+export async function revertHarnessSession(sessionId: string): Promise<HarnessSessionDetail> {
+  const detail = await getHarnessSessionDetail(sessionId);
+  const root = resolve(detail.launch.working_dir);
+  const writtenFiles = detail.events.flatMap((event) => {
+    if (event.event_type !== "fs.file_written") {
+      return [];
+    }
+    const payload = event.payload as { relative_path?: unknown };
+    return typeof payload.relative_path === "string" ? [payload.relative_path] : [];
+  });
+  const reverted: string[] = [];
+  for (const relativePath of writtenFiles) {
+    const absolutePath = resolve(root, relativePath);
+    const rel = relative(root, absolutePath);
+    if (rel.startsWith("..") || rel === "" || rel.startsWith("/")) {
+      continue;
+    }
+    await rm(absolutePath, { force: true });
+    reverted.push(relativePath);
+  }
+  await appendHarnessEvent(sessionId, createEvent({
+    event_type: "session.reverted",
+    trace_id: detail.session.trace_id ?? createTraceId("session"),
+    workspace_id: detail.session.workspace_id,
+    session_id: sessionId,
+    source: "runtime",
+    payload: {
+      reverted_files: reverted,
+      strategy: "stub_file_delete"
+    }
+  }));
+  return getHarnessSessionDetail(sessionId);
 }

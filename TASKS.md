@@ -24,10 +24,7 @@
 
 ## In Progress
 
-- [ ] `7` Harness Abstraction, Lifecycle, and Watchdog
-  - Doc: [docs/task/007-harness-lifecycle.md](docs/task/007-harness-lifecycle.md)
-  - Goal: Visible (PTY) and headless harness modes; lifecycle state machine; worker status protocol; watchdog; allowlist enforcement; stub worker.
-  - Current slice: harness schemas, schema version 7, stub worker package, launch/list/show/cancel API + CLI, Sessions UI surface, persisted event stream and artifacts, idle watchdog, allowlist denial, and restart recovery-to-blocked for in-flight stub sessions.
+- None.
 
 ## Testing
 
@@ -117,9 +114,21 @@
 - idle-timeout scenario emits `watchdog.timeout`, kills the stub worker, and moves the session to `blocked`
 - `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json plan start task-seven-smoke --prompt "Verify sessions ignores plan rows"`
 - `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json sessions --workspace task-seven-smoke` excludes Plan Mode rows and only returns harness-backed sessions
+- Task 007 completion slice verified durable queue and per-workspace serial scheduling with a visible session holding the workspace while the next headless session remained queued.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward session attach session_22615b1e0f254cd0 --input "echo filter ok"` verified visible `node-pty` bridge attach, terminal input, `pty.raw`, and no parser error for PTY echo.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session launch task-seven-smoke --scenario qa-missing-evidence` verified `agent.qa_reviewed` and `blocked` lifecycle for missing QA evidence.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session launch task-seven-smoke --scenario file-write` plus `ward session revert <session-id>` verified `fs.file_written`, `session.reverted`, and deletion of `.ward-stub-session-output.txt`.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session launch task-seven-smoke --scenario default --incognito` verified default session lists exclude incognito rows while `--include-incognito` includes them.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward session tail <session-id> --duration-ms 250` verified SSE named-event streaming and bounded tail shutdown.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session launch task-seven-smoke --scenario throughput` persisted 1,200 `worker.message` events and finished `done`.
+- Runtime restart recovery verified with `long-running`: interrupted session `session_9fb05273870b4609` recovered as `blocked` with summary, and queued session `session_e69a9b4137214598` dequeued and finished after `ward up`.
 - `bun run build`
 
 ## Done
+
+- [x] `7` Harness Abstraction, Lifecycle, and Watchdog
+  - Doc: [docs/task/007-harness-lifecycle.md](docs/task/007-harness-lifecycle.md)
+  - Goal: Visible PTY and headless harness modes; lifecycle state machine; worker status protocol; watchdog; allowlist enforcement; durable queue; stub worker.
 
 - [x] `6` Plan Mode and Code-Context Service
   - Doc: [docs/task/006-plan-mode.md](docs/task/006-plan-mode.md)

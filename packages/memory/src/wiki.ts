@@ -440,6 +440,7 @@ function sessionDocs(db: Database): SearchableDoc[] {
     FROM session
     LEFT JOIN workspace ON workspace.id = session.workspace_id
     WHERE session.summary IS NOT NULL AND trim(session.summary) != ''
+      AND COALESCE(session.incognito, 0) = 0
   `).all().map((row) => SearchableDocSchema.parse({
     doc_id: `session:${row.id}`,
     kind: "session",

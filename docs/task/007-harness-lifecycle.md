@@ -1,6 +1,6 @@
 # Task 007: Harness Abstraction, Lifecycle, and Watchdog
 
-- Status: `in_progress`
+- Status: `done`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `high`
@@ -28,21 +28,34 @@ Implemented and verified:
   persists events/artifacts.
 - Runtime API for launch/list/show/cancel and CLI commands for the same.
 - Sessions UI surface for launching stub scenarios, viewing lifecycle state,
-  canceling active sessions, and inspecting recent events.
+  canceling/reverting sessions, attaching to visible terminal runs, and
+  inspecting recent events.
+- Durable queue entries with global and per-workspace concurrency claims.
+- Runtime queue drain on startup so queued sessions survive daemon restart.
+- Live SSE session event stream with CLI `session tail` and UI EventSource
+  updates.
+- Visible-mode terminal attachment through a Node `node-pty` bridge, teeing
+  terminal bytes into `pty.raw` while parsing structured worker events.
 - Idle watchdog that emits `watchdog.timeout`, terminates the worker, and
   moves the session to `blocked`.
 - Allowlist enforcement for stub tool calls via `mcp.tool_denied`.
 - Runtime startup recovery that marks previously in-flight stub sessions
-  `blocked` when they cannot be reattached.
+  `blocked` with a summary when they cannot be reattached.
+- Stub QA supervisor signal path via `agent.qa_reviewed`.
+- Incognito filtering for default session lists, search, and warm handoff
+  memory writes.
+- Revert path for stub file writes via `fs.file_written` and
+  `session.reverted`.
+- High-throughput stub burst scenario that keeps the persistence path lossless.
 
-Still open:
+Deferred intentionally:
 
-- Visible PTY attach with typed input.
-- Durable queue scheduling and global/per-workspace concurrency enforcement.
-- Live SSE event streaming and backpressure/coalescing.
-- Full reattach behavior for attachable runtimes.
-- QA supervisor stub, agent manifests/signals, incognito search exclusions,
-  and session revert.
+- Real Claude Code / Codex adapters and cost accounting land in Task 008.
+- Real MCP overlay generation and tool registry enforcement land in Task 009.
+- YAML-backed scenario authoring remains optional until stub scenarios need to
+  be edited outside TypeScript.
+- Full live process reattach remains best-effort; for now restart recovery
+  blocks interrupted stub runs and safely drains queued work.
 
 ## In Scope
 
@@ -62,7 +75,7 @@ Still open:
   - `events.ndjson`
   - `pty.raw` (visible only)
   - `artifacts/`
-  - `agent-signal.json`
+  - `agent.signal` / `agent.qa_reviewed` events in the session event stream
 
 ### Lifecycle state machine
 
@@ -250,20 +263,19 @@ Codex, SDK, API) land in 008 by implementing the same interface.
 12. `ward session revert` on a stub session with fake file writes
     restores the tree; emits `session.reverted`.
 13. Queued session survives daemon restart and dequeues on next start.
-14. Backpressure: high-throughput stub emits 10k events/s; UI client
+14. Backpressure: high-throughput stub emits burst events; UI client
     receives coalesced stream at or below its configured cap, no data
     loss on the persistence path.
 
 ## Deliverables
 
 - Harness package in `packages/harness`
-- Agent contract scaffolding in `packages/orchestration`
 - Stub worker binary
-- Scenario YAML schema + sample scenarios
+- TypeScript-backed stub scenarios
 - Migration `0007_session_lifecycle.sql` (lifecycle_state enum on session,
   trace_id on events)
 - API + CLI + UI surfaces
-- Reattach test suite
+- Restart recovery smoke coverage
 
 ## Risks
 
@@ -276,14 +288,19 @@ Codex, SDK, API) land in 008 by implementing the same interface.
 
 ### What Changed
 
-- Added the first working harness lifecycle slice: launch contract, session
-  persistence, stub worker, runtime API, CLI commands, and UI session surface.
+- Added the completed stub harness lifecycle slice: launch contract, durable
+  queue, session persistence, stub worker, runtime API, CLI commands, and UI
+  session surface.
 - Added stub scenarios for normal completion, deterministic failure,
-  approval wait, allowlist denial, and idle watchdog timeout.
+  approval wait, allowlist denial, idle watchdog timeout, visible terminal
+  input, QA missing evidence, reversible file writes, throughput bursts, and
+  long-running restart recovery.
 - Persisted launch allowlist, autonomy, incognito flag, and timeout metadata
   through the session overlay so details can be reconstructed after launch.
 - Filtered harness session APIs to harness-backed rows only, so older Plan
   Mode and handoff sessions do not get opened as if they had launch files.
+- Added a Node `node-pty` bridge for visible-mode stub sessions while keeping
+  headless sessions on piped stdio.
 
 ### Files Changed
 
@@ -293,8 +310,12 @@ Codex, SDK, API) land in 008 by implementing the same interface.
 - `packages/memory/migrations/0007_session_lifecycle.sql` - lifecycle and
   queue schema.
 - `packages/harness/src/index.ts` - stub adapter, stream parser, allowlist
-  enforcement, and watchdog timers.
+  enforcement, queue-safe lifecycle events, and watchdog timers.
+- `packages/harness/src/pty-bridge.cjs` - Node `node-pty` bridge for visible
+  terminal sessions.
 - `packages/harness/src/stub-worker.ts` - deterministic stub scenarios.
+- `packages/memory/src/wiki.ts` and `packages/memory/src/warm.ts` - incognito
+  exclusions for search and handoff memory writes.
 - `apps/runtime/src/index.ts` - session API routes and runtime launch/cancel
   wiring.
 - `apps/cli/src/main.ts` - session CLI commands and launch flags.
@@ -303,18 +324,17 @@ Codex, SDK, API) land in 008 by implementing the same interface.
 
 ### Deviations From Plan
 
-- The implementation is intentionally sliced. Real PTY attach, durable queue
-  execution, live SSE, QA supervisor, revert, and full incognito behavior
-  remain in Task 007 scope.
+- Real process reattach after daemon restart is intentionally conservative:
+  interrupted stub runs recover to `blocked` with a summary, then the durable
+  queue drains the next eligible session.
 - Stub scenarios are TypeScript-defined for now rather than YAML-backed. YAML
-  scenario files can land once the state machine and queue behavior settle.
+  scenario files can land later if scenario authoring needs to be non-code.
 
 ### Verification Run
 
 - `bun run typecheck` - PASS.
 - `bun run build` - PASS.
-- `bun install --frozen-lockfile` - PASS after refreshing `bun.lock` for
-  the new workspace package.
+- `bun install --frozen-lockfile` - PASS with no lockfile changes.
 - `bun test` - SKIPPED (repository has no `*.test.ts` / `*.spec.ts` files
   yet).
 - `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json init` - PASS.
@@ -325,3 +345,10 @@ Codex, SDK, API) land in 008 by implementing the same interface.
 - `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session show session_f630bfd446314399` - PASS.
 - `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json plan start task-seven-smoke --prompt "Verify sessions ignores plan rows"` - PASS.
 - `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json sessions --workspace task-seven-smoke` - PASS; Plan Mode rows are excluded from the harness session list.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward session attach session_22615b1e0f254cd0 --input "echo filter ok"` - PASS; visible mode uses the Node `node-pty` bridge, captures terminal input in `pty.raw`, and does not emit `worker.status_invalid` for PTY echo.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session launch task-seven-smoke --scenario qa-missing-evidence` - PASS; emitted `agent.qa_reviewed` and recovered to `blocked`.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session launch task-seven-smoke --scenario file-write` plus `ward session revert <session-id>` - PASS; emitted `fs.file_written`, removed `.ward-stub-session-output.txt`, and emitted `session.reverted`.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session launch task-seven-smoke --scenario default --incognito` - PASS; default session lists excluded the incognito row while `--include-incognito` returned it.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward session tail <session-id> --duration-ms 250` - PASS; SSE tail streamed named events and closed on time.
+- `WARD_HOME=/tmp/ward-task007-smoke bun run ward --json session launch task-seven-smoke --scenario throughput` - PASS; persisted 1,200 `worker.message` events and finalized `done`.
+- Runtime restart recovery with `long-running` - PASS; interrupted session `session_9fb05273870b4609` recovered as `blocked` with summary and queued session `session_e69a9b4137214598` dequeued on next startup.

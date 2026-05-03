@@ -253,6 +253,7 @@ type HarnessSession = {
   mode: string | null;
   lifecycle_state: string | null;
   queue_state: string | null;
+  queue_position: number | null;
   working_dir: string | null;
   summary: string | null;
   incognito: boolean;
@@ -268,6 +269,7 @@ type HarnessSessionDetail = {
   session: HarnessSession;
   events: WardEvent[];
   artifacts: string[];
+  pty_output: string;
   paths: {
     session_dir: string;
     events_path: string;
@@ -391,6 +393,7 @@ function App() {
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [sessionDetail, setSessionDetail] = useState<HarnessSessionDetail | null>(null);
   const [sessionBusy, setSessionBusy] = useState<"" | "launch" | "cancel" | "refresh">("");
+  const [terminalInput, setTerminalInput] = useState("");
 
   const selectedWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.slug === selectedSlug) ?? null,
@@ -528,6 +531,50 @@ function App() {
   useEffect(() => {
     refreshMemory(memoryScope, "").catch((err) => setError(err.message));
   }, [memoryScope]);
+
+  useEffect(() => {
+    if (!selectedSessionId) {
+      return;
+    }
+    const source = new EventSource(`/api/sessions/${encodeURIComponent(selectedSessionId)}/events`);
+    const eventNames = [
+      "session.created",
+      "session.state_changed",
+      "worker.status",
+      "worker.message",
+      "worker.terminal",
+      "worker.exit",
+      "watchdog.timeout",
+      "mcp.tool_denied",
+      "mcp.tool_result",
+      "agent.artifact_written",
+      "agent.signal",
+      "agent.qa_reviewed",
+      "fs.file_written",
+      "session.reverted",
+      "intervention.answered"
+    ];
+    const handler = (event: MessageEvent) => {
+      const parsed = JSON.parse(event.data) as WardEvent;
+      setSessionDetail((current) => {
+        if (!current || current.session.id !== selectedSessionId || current.events.some((item) => item.event_id === parsed.event_id)) {
+          return current;
+        }
+        return {
+          ...current,
+          events: [...current.events, parsed],
+          pty_output: parsed.event_type === "worker.terminal" && typeof (parsed.payload as { data?: unknown }).data === "string"
+            ? `${current.pty_output}${(parsed.payload as { data: string }).data}`
+            : current.pty_output
+        };
+      });
+    };
+    for (const name of eventNames) {
+      source.addEventListener(name, handler);
+    }
+    source.onerror = () => source.close();
+    return () => source.close();
+  }, [selectedSessionId]);
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -835,6 +882,46 @@ function App() {
     } finally {
       setSessionBusy("");
     }
+  }
+
+  async function revertSession() {
+    if (!sessionDetail) {
+      return;
+    }
+    setSessionBusy("refresh");
+    try {
+      const response = await api<{ detail: HarnessSessionDetail }>(`/api/sessions/${encodeURIComponent(sessionDetail.session.id)}/revert`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      setSessionDetail(response.detail);
+      setMessage("Harness session reverted.");
+      await refreshSessionSurface(selectedSlug, response.detail.session.id);
+    } finally {
+      setSessionBusy("");
+    }
+  }
+
+  async function sendTerminalInput() {
+    if (!sessionDetail || !terminalInput.trim()) {
+      return;
+    }
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new WebSocket(`${protocol}//${window.location.host}/api/sessions/${encodeURIComponent(sessionDetail.session.id)}/pty`);
+    await new Promise<void>((resolvePromise, reject) => {
+      const timer = window.setTimeout(() => reject(new Error("Terminal attach timed out.")), 5000);
+      socket.onopen = () => {
+        window.clearTimeout(timer);
+        socket.send(`${terminalInput}\n`);
+        window.setTimeout(() => {
+          socket.close();
+          resolvePromise();
+        }, 300);
+      };
+      socket.onerror = () => reject(new Error("Terminal attach failed."));
+    });
+    setTerminalInput("");
+    await readSession(sessionDetail.session.id);
   }
 
   async function saveWikiPage() {
@@ -1282,6 +1369,11 @@ function App() {
                 <option value="await-approval">Approval</option>
                 <option value="tool-denied">Tool Denied</option>
                 <option value="idle-timeout">Idle Watchdog</option>
+                <option value="visible-echo">Visible Echo</option>
+                <option value="qa-missing-evidence">QA Missing Evidence</option>
+                <option value="file-write">File Write</option>
+                <option value="throughput">Throughput</option>
+                <option value="long-running">Long Running</option>
               </select>
             </div>
             <button type="submit" disabled={!selectedWorkspace || sessionBusy !== ""}>
@@ -1297,7 +1389,7 @@ function App() {
                 onClick={() => readSession(session.id).catch((err) => setError(err.message))}
               >
                 <strong>{session.task_title ?? session.brain_id ?? session.id}</strong>
-                <span>{session.lifecycle_state ?? "new"} · {session.mode ?? "mode"}</span>
+                <span>{session.lifecycle_state ?? "new"} · {session.queue_state ?? "queue"}{session.queue_position ? ` #${session.queue_position}` : ""}</span>
               </button>
             ))}
           </div>
@@ -1326,12 +1418,24 @@ function App() {
             <strong>{sessionDetail?.session.summary ?? sessionDetail?.session.brain_id ?? "No active session"}</strong>
             <p>{sessionDetail?.session.working_dir ?? (selectedWorkspace ? "Launch a stub session for this workspace." : "Select a workspace first.")}</p>
           </div>
+          {sessionDetail?.session.mode === "visible" ? (
+            <div className="terminal-pane">
+              <pre>{sessionDetail.pty_output || "Terminal output will appear here."}</pre>
+              <div className="session-controls">
+                <input value={terminalInput} onChange={(event) => setTerminalInput(event.target.value)} placeholder="Type terminal input" />
+                <button type="button" onClick={() => sendTerminalInput().catch((err) => setError(err.message))}>Send</button>
+              </div>
+            </div>
+          ) : null}
           <div className="session-actions">
             <button type="button" disabled={!sessionDetail || sessionBusy !== ""} onClick={() => refreshSessionSurface(selectedSlug, selectedSessionId).catch((err) => setError(err.message))}>
               {sessionBusy === "refresh" ? "Refreshing..." : "Refresh"}
             </button>
             <button type="button" disabled={!sessionDetail || ["done", "failed", "blocked", "canceled"].includes(sessionDetail.session.lifecycle_state ?? "") || sessionBusy !== ""} onClick={() => cancelSession().catch((err) => setError(err.message))}>
               {sessionBusy === "cancel" ? "Canceling..." : "Cancel"}
+            </button>
+            <button type="button" disabled={!sessionDetail || sessionBusy !== ""} onClick={() => revertSession().catch((err) => setError(err.message))}>
+              Revert
             </button>
           </div>
         </section>

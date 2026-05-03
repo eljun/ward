@@ -175,6 +175,34 @@ async function apiRequest<T = unknown>(path: string, init: RequestInit = {}): Pr
   return data as T;
 }
 
+async function runtimeFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  await ensureRuntime();
+  const paths = resolveWardPaths();
+  const state = await readRuntimeState(paths);
+  if (!state.port) {
+    throw new Error("WARD runtime port is unavailable.");
+  }
+  const token = await readDeviceToken(paths);
+  const headers = new Headers(init.headers);
+  headers.set("authorization", `Bearer ${token}`);
+  return fetch(`http://127.0.0.1:${state.port}${path}`, {
+    ...init,
+    headers
+  });
+}
+
+async function runtimeWebSocket(path: string): Promise<WebSocket> {
+  await ensureRuntime();
+  const paths = resolveWardPaths();
+  const state = await readRuntimeState(paths);
+  if (!state.port) {
+    throw new Error("WARD runtime port is unavailable.");
+  }
+  const token = await readDeviceToken(paths);
+  const separator = path.includes("?") ? "&" : "?";
+  return new WebSocket(`ws://127.0.0.1:${state.port}${path}${separator}token=${encodeURIComponent(token)}`);
+}
+
 async function commandInit(): Promise<CliResult> {
   const paths = resolveWardPaths();
   const repoRoot = resolveRepoRoot();
@@ -946,7 +974,7 @@ async function commandSession(args: string[]): Promise<CliResult> {
     const parsed = parseFlags(rest);
     const [workspace] = parsed.positional;
     if (!workspace) {
-      throw new Error("Usage: ward session launch <workspace-slug> [--task <task-id>] [--mode visible|headless] [--scenario default|fails|await-approval|tool-denied|idle-timeout]");
+      throw new Error("Usage: ward session launch <workspace-slug> [--task <task-id>] [--mode visible|headless] [--scenario default|fails|await-approval|tool-denied|idle-timeout|visible-echo|qa-missing-evidence|file-write|throughput|long-running]");
     }
     const allowedTools = listFlag(parsed.flags, "allow-tools");
     const data = await apiRequest("/api/sessions", {
@@ -990,8 +1018,92 @@ async function commandSession(args: string[]): Promise<CliResult> {
     return { ok: true, command: "session cancel", timestamp: nowIso(), message: "WARD session canceled.", data };
   }
 
+  if (subcommand === "revert") {
+    const [sessionId] = rest;
+    if (!sessionId) {
+      throw new Error("Usage: ward session revert <session-id>");
+    }
+    const data = await apiRequest(`/api/sessions/${encodeURIComponent(sessionId)}/revert`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    return { ok: true, command: "session revert", timestamp: nowIso(), message: "WARD session reverted.", data };
+  }
+
+  if (subcommand === "tail") {
+    const parsed = parseFlags(rest);
+    const [sessionId] = parsed.positional;
+    if (!sessionId) {
+      throw new Error("Usage: ward session tail <session-id> [--once] [--duration-ms <ms>]");
+    }
+    if (parsed.flags.once) {
+      const data = await apiRequest<{ detail: { events: unknown[] } }>(`/api/sessions/${encodeURIComponent(sessionId)}`);
+      return { ok: true, command: "session tail", timestamp: nowIso(), message: "WARD session events.", data: { events: data.detail.events } };
+    }
+    const response = await runtimeFetch(`/api/sessions/${encodeURIComponent(sessionId)}/events`);
+    if (!response.ok || !response.body) {
+      throw new Error(`Unable to open session event stream (${response.status}).`);
+    }
+    const duration = numberFlag(parsed.flags, "duration-ms");
+    const started = Date.now();
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    while (!duration || Date.now() - started < duration) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const next = duration
+        ? await Promise.race([
+            reader.read(),
+            new Promise<"timeout">((resolve) => {
+              timer = setTimeout(() => resolve("timeout"), Math.max(0, duration - (Date.now() - started)));
+            })
+          ])
+        : await reader.read();
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (next === "timeout") {
+        break;
+      }
+      if (next.done) {
+        break;
+      }
+      process.stdout.write(decoder.decode(next.value));
+    }
+    await reader.cancel().catch(() => undefined);
+    return { ok: true, command: "session tail", timestamp: nowIso(), message: "WARD session tail closed." };
+  }
+
+  if (subcommand === "attach") {
+    const parsed = parseFlags(rest);
+    const [sessionId] = parsed.positional;
+    if (!sessionId) {
+      throw new Error("Usage: ward session attach <session-id> [--input <text>]");
+    }
+    const input = stringFlag(parsed.flags, "input");
+    const ws = await runtimeWebSocket(`/api/sessions/${encodeURIComponent(sessionId)}/pty`);
+    await new Promise<void>((resolvePromise, reject) => {
+      const timer = setTimeout(() => reject(new Error("PTY attach timed out.")), 5000);
+      ws.onopen = () => {
+        clearTimeout(timer);
+        if (input) {
+          ws.send(`${input}\n`);
+          setTimeout(() => {
+            ws.close();
+            resolvePromise();
+          }, 750);
+        } else {
+          process.stdin.on("data", (chunk) => ws.send(String(chunk)));
+        }
+      };
+      ws.onmessage = (event) => process.stdout.write(String(event.data));
+      ws.onerror = () => reject(new Error("PTY WebSocket failed."));
+      ws.onclose = () => resolvePromise();
+    });
+    return { ok: true, command: "session attach", timestamp: nowIso(), message: "WARD session attach closed." };
+  }
+
   if (subcommand !== "simulate") {
-    throw new Error("Usage: ward session launch|show|cancel|simulate ...");
+    throw new Error("Usage: ward session launch|show|tail|attach|cancel|revert|simulate ...");
   }
   const parsed = parseFlags(rest);
   const [workspace] = parsed.positional;
@@ -1031,6 +1143,21 @@ async function commandSessions(args: string[]): Promise<CliResult> {
   const suffix = params.size > 0 ? `?${params.toString()}` : "";
   const data = await apiRequest(`/api/sessions${suffix}`);
   return { ok: true, command: "sessions", timestamp: nowIso(), message: "WARD sessions.", data };
+}
+
+async function commandQueue(args: string[]): Promise<CliResult> {
+  const parsed = parseFlags(args);
+  const params = new URLSearchParams();
+  const workspace = stringFlag(parsed.flags, "workspace");
+  if (workspace) {
+    params.set("workspace", workspace);
+  }
+  if (parsed.flags["include-incognito"]) {
+    params.set("include_incognito", "true");
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const data = await apiRequest(`/api/queue${suffix}`);
+  return { ok: true, command: "queue", timestamp: nowIso(), message: "WARD harness queue.", data };
 }
 
 async function dispatch(args: string[]): Promise<CliResult> {
@@ -1077,6 +1204,8 @@ async function dispatch(args: string[]): Promise<CliResult> {
       return commandHandoff(rest);
     case "sessions":
       return commandSessions(rest);
+    case "queue":
+      return commandQueue(rest);
     case "session":
       return commandSession(rest);
     default:

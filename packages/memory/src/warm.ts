@@ -748,7 +748,12 @@ export async function writeSessionHandoff(
     const task = session.task_id
       ? db.query<{ id: string; title: string }, [string]>("SELECT id, title FROM task WHERE id = ?").get(session.task_id)
       : null;
-    return { session: sessionFromRow(session), workspace, task };
+    return {
+      session: sessionFromRow(session),
+      incognito: Boolean((session as unknown as { incognito?: number }).incognito),
+      workspace,
+      task
+    };
   });
 
   await ensureMemoryBootstrap();
@@ -771,10 +776,13 @@ export async function writeSessionHandoff(
     handoff
   });
 
-  await appendWikiPage(`workspace/${context.workspace.slug}`, "sessions.md", entry, "llm", `handoff: ${sessionId}`);
-  const wikiCommit = (await wikiPageHistory(`workspace/${context.workspace.slug}`, "sessions.md"))[0]?.hash ?? null;
+  let wikiCommit: string | null = null;
+  if (!context.incognito) {
+    await appendWikiPage(`workspace/${context.workspace.slug}`, "sessions.md", entry, "llm", `handoff: ${sessionId}`);
+    wikiCommit = (await wikiPageHistory(`workspace/${context.workspace.slug}`, "sessions.md"))[0]?.hash ?? null;
+  }
 
-  if (draft.architecture_touched) {
+  if (draft.architecture_touched && !context.incognito) {
     await appendWikiPage(
       `workspace/${context.workspace.slug}`,
       "decisions.md",
@@ -823,7 +831,7 @@ export async function writeSessionHandoff(
       workspace_id: context.workspace.id,
       session_id: sessionId,
       source: "runtime",
-      payload: { session_id: sessionId, artifact_kind: "handoff", artifact_ref: "sessions.md" }
+      payload: { session_id: sessionId, artifact_kind: "handoff", artifact_ref: context.incognito ? "incognito-outcome" : "sessions.md" }
     }));
     return outcomeFromRow(row);
   });

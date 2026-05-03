@@ -91,7 +91,18 @@ export const LaunchSessionSchema = z.object({
   brain_id: z.string().optional().default("stub-worker"),
   runtime_kind: HarnessRuntimeKindSchema.optional().default("local"),
   mode: HarnessModeSchema.optional().default("headless"),
-  scenario: z.enum(["default", "fails", "await-approval", "tool-denied", "idle-timeout"]).optional().default("default"),
+  scenario: z.enum([
+    "default",
+    "fails",
+    "await-approval",
+    "tool-denied",
+    "idle-timeout",
+    "visible-echo",
+    "qa-missing-evidence",
+    "file-write",
+    "throughput",
+    "long-running"
+  ]).optional().default("default"),
   goal: z.string().optional(),
   constraints: z.array(z.string()).optional().default([]),
   acceptance_criteria: z.array(z.string()).optional().default([]),
@@ -122,6 +133,7 @@ export const HarnessSessionSchema = z.object({
   mode: z.string().nullable(),
   lifecycle_state: z.string().nullable(),
   queue_state: z.string().nullable(),
+  queue_position: z.number().int().positive().nullable(),
   working_dir: z.string().nullable(),
   summary: z.string().nullable(),
   incognito: z.boolean(),
@@ -151,7 +163,8 @@ export const HarnessSessionDetailSchema = z.object({
   launch: HarnessLaunchSchema,
   paths: HarnessSessionPathsSchema,
   events: z.array(WardEventSchema),
-  artifacts: z.array(z.string())
+  artifacts: z.array(z.string()),
+  pty_output: z.string()
 });
 export type HarnessSessionDetail = z.infer<typeof HarnessSessionDetailSchema>;
 
@@ -177,6 +190,18 @@ export const StubWorkerEnvelopeSchema = z.discriminatedUnion("type", [
     type: z.literal("tool_call"),
     tool_name: z.string(),
     input: z.unknown().optional()
+  }),
+  z.object({
+    type: z.literal("agent_signal"),
+    agent_id: z.string(),
+    status: z.enum(["pass", "needs_work", "blocked"]),
+    summary: z.string(),
+    missing_evidence: z.array(z.string()).optional()
+  }),
+  z.object({
+    type: z.literal("file_write"),
+    relative_path: z.string(),
+    body: z.string()
   }),
   z.object({
     type: z.literal("tool_denied"),

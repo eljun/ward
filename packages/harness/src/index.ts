@@ -54,6 +54,8 @@ export type RunningHarness = {
   sessionId: string;
   pid: number | null;
   events(): AsyncIterable<WardEvent>;
+  terminal(): AsyncIterable<string>;
+  write(input: string): Promise<void>;
   cancel(): Promise<void>;
   closed: Promise<{ exitCode: number | null; signalCode: NodeJS.Signals | null }>;
 };
@@ -111,6 +113,26 @@ function mapEnvelopeToEvent(launch: HarnessLaunch, envelope: StubWorkerEnvelope)
           }
     });
   }
+  if (envelope.type === "agent_signal") {
+    return createEvent({
+      event_type: envelope.agent_id === "qa-supervisor" ? "agent.qa_reviewed" : "agent.signal",
+      trace_id: launch.context_packet.trace_id,
+      workspace_id: launch.workspace_id,
+      session_id: launch.session_id,
+      source: "agent",
+      payload: envelope
+    });
+  }
+  if (envelope.type === "file_write") {
+    return createEvent({
+      event_type: "fs.file_written",
+      trace_id: launch.context_packet.trace_id,
+      workspace_id: launch.workspace_id,
+      session_id: launch.session_id,
+      source: "harness",
+      payload: envelope
+    });
+  }
   return createEvent({
     event_type: "mcp.tool_denied",
     trace_id: launch.context_packet.trace_id,
@@ -121,19 +143,20 @@ function mapEnvelopeToEvent(launch: HarnessLaunch, envelope: StubWorkerEnvelope)
   });
 }
 
-function consumeStdout(
+function createStdoutConsumer(
   launch: HarnessLaunch,
-  child: { stdout: NodeJS.ReadableStream },
-  emitEvent: (event: WardEvent) => void
-): void {
+  emitEvent: (event: WardEvent) => void,
+  emitTerminal: (data: string) => void
+): (text: string) => void {
   let buffer = "";
-  child.stdout.on("data", (chunk) => {
-    buffer += String(chunk);
+  return (text: string) => {
+    emitTerminal(text);
+    buffer += text;
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
     for (const line of lines) {
       const trimmed = line.trim();
-      if (!trimmed) {
+      if (!trimmed || !trimmed.startsWith("{")) {
         continue;
       }
       try {
@@ -153,17 +176,30 @@ function consumeStdout(
         }));
       }
     }
-  });
+  };
+}
+
+function consumeStdout(
+  launch: HarnessLaunch,
+  child: { stdout: NodeJS.ReadableStream },
+  emitEvent: (event: WardEvent) => void,
+  emitTerminal: (data: string) => void
+): void {
+  const consume = createStdoutConsumer(launch, emitEvent, emitTerminal);
+  child.stdout.on("data", (chunk) => consume(String(chunk)));
 }
 
 function consumeStderr(
   launch: HarnessLaunch,
   child: { stderr: NodeJS.ReadableStream },
-  emitEvent: (event: WardEvent) => void
+  emitEvent: (event: WardEvent) => void,
+  emitTerminal: (data: string) => void
 ): void {
   let buffer = "";
   child.stderr.on("data", (chunk) => {
-    buffer += String(chunk);
+    const text = String(chunk);
+    emitTerminal(text);
+    buffer += text;
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
     for (const line of lines) {
@@ -189,13 +225,15 @@ export class StubHarnessAdapter implements HarnessAdapter {
 
   async launch(input: HarnessLaunch): Promise<RunningHarness> {
     const queue = new AsyncQueue<WardEvent>();
+    const terminalQueue = new AsyncQueue<string>();
     const workerEntry = join(import.meta.dir, "stub-worker.ts");
     let watchdogTripped = false;
     let wallClockTimer: ReturnType<typeof setTimeout> | undefined;
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
-    const child = spawn(process.execPath, [workerEntry], {
+    const ptyBridge = join(import.meta.dir, "pty-bridge.cjs");
+    const child = spawn(input.mode === "visible" ? "node" : process.execPath, input.mode === "visible" ? [ptyBridge, process.execPath, workerEntry] : [workerEntry], {
       cwd: input.working_dir,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
         WARD_SESSION_ID: input.session_id,
@@ -257,17 +295,37 @@ export class StubHarnessAdapter implements HarnessAdapter {
     };
     const emitEvent = (event: WardEvent) => {
       queue.push(event);
+      if (event.event_type === "worker.status") {
+        const payload = event.payload as { state?: unknown };
+        if (payload.state === "done" || payload.state === "failed" || payload.state === "blocked" || payload.state === "canceled") {
+          clearTimers();
+          child.stdin?.end();
+          return;
+        }
+      }
+      resetIdleTimer();
+    };
+    const emitTerminal = (data: string) => {
+      terminalQueue.push(data);
+      queue.push(createEvent({
+        event_type: "worker.terminal",
+        trace_id: input.context_packet.trace_id,
+        workspace_id: input.workspace_id,
+        session_id: input.session_id,
+        source: "harness",
+        payload: { data }
+      }));
       resetIdleTimer();
     };
 
     wallClockTimer = setTimeout(() => tripWatchdog("wall_clock_timeout"), input.timeouts.wall_clock_max_ms);
     wallClockTimer.unref?.();
     resetIdleTimer();
-    consumeStdout(input, child, emitEvent);
-    consumeStderr(input, child, emitEvent);
+    consumeStdout(input, child, emitEvent, emitTerminal);
+    consumeStderr(input, child, emitEvent, emitTerminal);
 
     const closed = new Promise<{ exitCode: number | null; signalCode: NodeJS.Signals | null }>((resolve) => {
-      child.on("exit", (exitCode, signalCode) => {
+      const onExit = (exitCode: number | null, signalCode: NodeJS.Signals | null) => {
         clearTimers();
         queue.push(createEvent({
           event_type: "worker.exit",
@@ -277,15 +335,21 @@ export class StubHarnessAdapter implements HarnessAdapter {
           source: "harness",
           payload: { exit_code: exitCode, signal_code: signalCode }
         }));
+        terminalQueue.close();
         queue.close();
         resolve({ exitCode, signalCode });
-      });
+      };
+      child.on("exit", onExit);
     });
 
     return {
       sessionId: input.session_id,
       pid: child.pid ?? null,
       events: () => queue,
+      terminal: () => terminalQueue,
+      write: async (data: string) => {
+        child.stdin?.write(data);
+      },
       cancel: async () => {
         child.kill("SIGTERM");
       },
