@@ -12,4 +12,5 @@ export * from "./plan.ts";
 export * from "./sessions.ts";
 export * from "./brains.ts";
 export * from "./mcp.ts";
+export * from "./mcp-policy.ts";
 export * from "./secrets.ts";

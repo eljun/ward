@@ -11,6 +11,7 @@ import {
   McpDeleteServerSchema,
   McpEditableScopeSchema,
   McpPatchServerSchema,
+  McpPolicyPreviewRequestSchema,
   McpScopeSchema,
   OpenGateSchema,
   ProfilePatchSchema,
@@ -96,6 +97,7 @@ import {
   prewarmWarmCache,
   prepareHarnessLaunch,
   publishPlanTasksExternal,
+  previewMcpPolicy,
   readWikiPage,
   rebuildSearchIndex,
   readDeviceToken,
@@ -728,6 +730,13 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
           workspace: workspace === undefined || workspace === null ? undefined : String(workspace),
           timeout_ms: Number.isFinite(timeoutMs) ? timeoutMs : undefined
         })
+      });
+    }
+
+    if (parts[0] === "mcp" && parts[1] === "policy" && req.method === "POST") {
+      return json({
+        ok: true,
+        decision: await previewMcpPolicy(McpPolicyPreviewRequestSchema.parse(await readJson(req)))
       });
     }
 

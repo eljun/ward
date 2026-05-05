@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AutonomyLevelSchema } from "../schemas.ts";
 
 export const McpScopeSchema = z.enum(["global", "workspace", "repo"]);
 export type McpScope = z.infer<typeof McpScopeSchema>;
@@ -12,6 +13,9 @@ export type McpTransport = z.infer<typeof McpTransportSchema>;
 export const McpToolClassSchema = z.enum(["read", "write", "destructive", "privileged"]);
 export type McpToolClass = z.infer<typeof McpToolClassSchema>;
 
+export const McpCapabilityProfileSchema = z.enum(["browser_qa", "repo_hosting", "deployment", "database"]);
+export type McpCapabilityProfile = z.infer<typeof McpCapabilityProfileSchema>;
+
 export const McpLifecycleStatusSchema = z.enum(["ok", "error", "disabled", "unsupported"]);
 export type McpLifecycleStatus = z.infer<typeof McpLifecycleStatusSchema>;
 
@@ -21,6 +25,57 @@ export const McpToolSummarySchema = z.object({
   input_schema: z.unknown().optional()
 });
 export type McpToolSummary = z.infer<typeof McpToolSummarySchema>;
+
+export const McpToolClassificationSourceSchema = z.enum(["override", "explicit", "heuristic", "default"]);
+export type McpToolClassificationSource = z.infer<typeof McpToolClassificationSourceSchema>;
+
+export const McpToolClassificationSchema = z.object({
+  tool_name: z.string(),
+  tool_class: McpToolClassSchema,
+  source: McpToolClassificationSourceSchema,
+  matched_pattern: z.string().nullable()
+});
+export type McpToolClassification = z.infer<typeof McpToolClassificationSchema>;
+
+export const McpPolicyDecisionSchema = z.object({
+  tool_name: z.string(),
+  tool_class: McpToolClassSchema,
+  class_source: McpToolClassificationSourceSchema,
+  matched_pattern: z.string().nullable(),
+  autonomy_level: AutonomyLevelSchema,
+  ci_green: z.boolean(),
+  allowed_tools: z.array(z.string()),
+  capability_profiles: z.array(McpCapabilityProfileSchema),
+  allowed: z.boolean(),
+  reasons: z.array(z.string()),
+  denial_reason: z.string().nullable(),
+  synthetic_result: z.object({
+    type: z.literal("tool_not_allowed"),
+    tool_name: z.string(),
+    reason: z.string()
+  }).nullable(),
+  denial_payload: z.object({
+    tool_name: z.string(),
+    tool_class: McpToolClassSchema,
+    autonomy_level: AutonomyLevelSchema,
+    reason: z.string(),
+    allowed_tools: z.array(z.string()),
+    capability_profiles: z.array(McpCapabilityProfileSchema)
+  }).nullable()
+});
+export type McpPolicyDecision = z.infer<typeof McpPolicyDecisionSchema>;
+
+export const McpPolicyPreviewRequestSchema = z.object({
+  workspace: z.string().optional(),
+  server_id: z.string().optional(),
+  tool_name: z.string().min(1),
+  tool_class: McpToolClassSchema.optional(),
+  autonomy_level: AutonomyLevelSchema.optional().default("standard"),
+  allowed_tools: z.array(z.string()).optional(),
+  capability_profiles: z.array(McpCapabilityProfileSchema).optional().default([]),
+  ci_green: z.boolean().optional().default(false)
+});
+export type McpPolicyPreviewRequest = z.input<typeof McpPolicyPreviewRequestSchema>;
 
 export const McpServerConfigSchema = z.object({
   command: z.string().min(1).optional(),
@@ -32,7 +87,7 @@ export const McpServerConfigSchema = z.object({
   ward_tool_scopes: z.array(McpToolClassSchema).optional().default(["read"]),
   ward_enabled: z.boolean().optional().default(true),
   ward_tool_class_overrides: z.record(z.string(), McpToolClassSchema).optional().default({}),
-  ward_capability_profiles: z.array(z.string()).optional().default([])
+  ward_capability_profiles: z.array(McpCapabilityProfileSchema).optional().default([])
 }).passthrough().superRefine((config, context) => {
   if (config.transport === "stdio" && !config.command) {
     context.addIssue({
@@ -64,7 +119,7 @@ export const McpServerConfigPatchSchema = z.object({
   ward_tool_scopes: z.array(McpToolClassSchema).optional(),
   ward_enabled: z.boolean().optional(),
   ward_tool_class_overrides: z.record(z.string(), McpToolClassSchema).optional(),
-  ward_capability_profiles: z.array(z.string()).optional()
+  ward_capability_profiles: z.array(McpCapabilityProfileSchema).optional()
 }).passthrough();
 export type McpServerConfigPatch = z.infer<typeof McpServerConfigPatchSchema>;
 

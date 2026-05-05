@@ -234,3 +234,13 @@ routes for `/api/mcp/servers` and `/api/mcp/doctor`. The slice verifies
 fixture success, invalid JSON failure reporting, API access, and redaction of
 resolved env/header values in stderr logs. Long-lived pools, tool invocation,
 circuit breakers, HTTP lifecycle checks, and UI remain in later slices.
+
+### MCP Tool Classification and Autonomy Policy Slice
+
+[009D MCP Tool Classification and Autonomy Policy](009d-mcp-tool-classification-autonomy.md)
+adds the decision layer before real MCP tool invocation: deterministic tool
+classification, explicit config overrides, capability profile expansion,
+per-run allowlist narrowing, and the strict/standard/lenient autonomy matrix.
+It exposes `ward mcp policy` and `POST /api/mcp/policy` so the proxy slice can
+reuse a tested structured `McpPolicyDecision` with synthetic denial payloads.
+Actual `tools/call`, circuit breakers, and approval UI remain deferred.

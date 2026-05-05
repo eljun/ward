@@ -2,10 +2,6 @@
 
 ## Planned
 
-- [ ] `9D` MCP Tool Classification and Autonomy Policy
-  - Doc: [docs/task/009d-mcp-tool-classification-autonomy.md](docs/task/009d-mcp-tool-classification-autonomy.md)
-  - Goal: Classify MCP tools, apply overrides, expand capability profiles, and enforce autonomy/allowlist decisions before dispatch.
-
 - [ ] `9E` MCP Tool Proxy and Circuit Breakers
   - Doc: [docs/task/009e-mcp-tool-proxy-circuit-breakers.md](docs/task/009e-mcp-tool-proxy-circuit-breakers.md)
   - Goal: Dispatch allowed MCP tool calls through WARD policy, emit events, and freeze failing servers through quota-backed circuit breakers.
@@ -35,9 +31,20 @@
 - [ ] `9` MCP Connections Layer
   - Doc: [docs/task/009-mcp-connections.md](docs/task/009-mcp-connections.md)
   - Goal: Three-scope MCP registry (global / workspace / repo, reuses `.mcp.json`); secrets via OS keychain; tool routing; autonomy-class policy; WARD-as-MCP-server.
-  - Current slice: 009C MCP server lifecycle and doctor.
+  - Current slice: 009D MCP tool classification and autonomy policy.
 
 ## Testing
+
+- [ ] `9D` MCP Tool Classification and Autonomy Policy
+  - Doc: [docs/task/009d-mcp-tool-classification-autonomy.md](docs/task/009d-mcp-tool-classification-autonomy.md)
+  - Goal: Classify MCP tools, apply overrides, expand capability profiles, and enforce autonomy/allowlist decisions before dispatch.
+
+- Task 009D classifies `repos.get`, `issues.create`, `repos.delete`, and `payments.transfer` as read/write/destructive/privileged.
+- Task 009D config overrides beat heuristic classification.
+- Task 009D strict/standard/lenient autonomy gates return structured allow/deny decisions.
+- Task 009D per-run allowlist denial returns a synthetic `tool_not_allowed` result and denial payload.
+- Task 009D capability profiles expand to wildcard tool patterns.
+- Task 009D `ward mcp policy` and `POST /api/mcp/policy` smoke checks pass.
 
 - [ ] `9C` MCP Server Lifecycle and Doctor
   - Doc: [docs/task/009c-mcp-server-lifecycle-doctor.md](docs/task/009c-mcp-server-lifecycle-doctor.md)

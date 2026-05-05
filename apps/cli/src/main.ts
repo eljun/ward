@@ -1087,6 +1087,32 @@ async function commandSecrets(args: string[]): Promise<CliResult> {
 
 async function commandMcp(args: string[]): Promise<CliResult> {
   const [subcommand = "list", ...rest] = args;
+  if (subcommand === "policy") {
+    const parsed = parseFlags(rest);
+    const [toolName] = parsed.positional;
+    if (!toolName) {
+      throw new Error("Usage: ward mcp policy <tool-name> [--server <id>] [--workspace <slug>] [--autonomy strict|standard|lenient] [--class read|write|destructive|privileged] [--allowed <tool-or-pattern>] [--capability <profile>] [--ci-green]");
+    }
+    const body: Record<string, unknown> = {
+      tool_name: toolName,
+      server_id: stringFlag(parsed.flags, "server"),
+      workspace: stringFlag(parsed.flags, "workspace"),
+      autonomy_level: stringFlag(parsed.flags, "autonomy") ?? "standard",
+      tool_class: stringFlag(parsed.flags, "class"),
+      capability_profiles: listFlag(parsed.flags, "capability"),
+      ci_green: parsed.flags["ci-green"] === true
+    };
+    const allowedTools = listFlag(parsed.flags, "allowed");
+    if (allowedTools.length > 0) {
+      body.allowed_tools = allowedTools;
+    }
+    const data = await apiRequest("/api/mcp/policy", {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
+    return { ok: true, command: "mcp policy", timestamp: nowIso(), message: "WARD MCP policy decision.", data };
+  }
+
   if (subcommand === "doctor") {
     const parsed = parseFlags(rest);
     const params = new URLSearchParams();
@@ -1200,7 +1226,7 @@ async function commandMcp(args: string[]): Promise<CliResult> {
     return { ok: true, command: "mcp remove", timestamp: nowIso(), message: "WARD MCP server removed.", data };
   }
 
-  throw new Error("Usage: ward mcp list|servers|doctor|add|enable|disable|remove");
+  throw new Error("Usage: ward mcp list|servers|doctor|policy|add|enable|disable|remove");
 }
 
 async function commandWorkflow(args: string[]): Promise<CliResult> {

@@ -1,6 +1,6 @@
 # Task 009D: MCP Tool Classification and Autonomy Policy
 
-- Status: `planned`
+- Status: `testing`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `high`
@@ -98,3 +98,52 @@ remote tool invocation remains in the next slice.
   - `payments.transfer` -> privileged
 - API/CLI smoke for allowed and denied decisions
 
+## Implementation Notes
+
+### What Changed
+
+- Added typed MCP policy contracts for capability profiles, classification
+  source, policy preview requests, synthetic denial results, and structured
+  denial payloads.
+- Added deterministic MCP tool classification with explicit config overrides,
+  optional preview class input, and heuristic fallback.
+- Added capability profile expansion for `browser_qa`, `repo_hosting`,
+  `deployment`, and `database`.
+- Added autonomy gating for `strict`, `standard`, and `lenient`, including
+  CI-green handling for lenient destructive tools.
+- Added per-run allowlist narrowing with exact and wildcard patterns.
+- Added `POST /api/mcp/policy` and `ward mcp policy`.
+
+### Files Changed
+
+- `packages/core/src/mcp/index.ts` - policy schemas and typed capability
+  profile contracts.
+- `packages/memory/src/mcp-policy.ts` - classifier, profile expansion,
+  autonomy policy, allowlist checks, and preview helper.
+- `packages/memory/src/index.ts` - exported policy helpers.
+- `apps/runtime/src/index.ts` - MCP policy preview route.
+- `apps/cli/src/main.ts` - `ward mcp policy` preview command.
+- `docs/task/009-mcp-connections.md` and `TASKS.md` - slice tracking.
+
+### Deviations From Plan
+
+- None. The slice stays decision-only; no MCP tool invocation or circuit
+  breaker behavior was added.
+
+### Verification Run
+
+- `bun run typecheck` - PASS
+- `bun run build` - PASS
+- `git diff --check` - PASS
+- `bun test` - SKIPPED (repo has no test files yet; Bun exits 1)
+- Direct policy smoke for `repos.get`, `issues.create`, `repos.delete`, and
+  `payments.transfer` - PASS
+- Direct policy smoke for override beating heuristic classification - PASS
+- Direct policy smoke for allowlist denial, capability profile expansion,
+  and lenient destructive CI-green behavior - PASS
+- `WARD_HOME=/tmp/ward-task009d-smoke WARD_SECRET_BACKEND=file bun run ward --json init` - PASS
+- `WARD_HOME=/tmp/ward-task009d-smoke WARD_SECRET_BACKEND=file bun run ward --json mcp policy repos.get --autonomy strict` - PASS
+- CLI/API smoke for allowed and denied decisions - PASS
+- API smoke for config override classification through an effective MCP
+  server - PASS
+- `WARD_HOME=/tmp/ward-task009d-smoke WARD_SECRET_BACKEND=file bun run ward --json down` - PASS
