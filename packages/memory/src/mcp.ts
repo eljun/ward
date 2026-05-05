@@ -2,12 +2,15 @@ import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   EffectiveMcpConfigSchema,
+  McpDoctorResultSchema,
   McpAddServerSchema,
   McpConfigFileSchema,
   McpDeleteServerSchema,
   McpEditableScopeSchema,
   McpPatchServerSchema,
+  McpServerStatusSnapshotSchema,
   McpServerConfigSchema,
+  createTraceId,
   nowIso,
   type EffectiveMcpConfig,
   type McpAddServerInput,
@@ -16,12 +19,15 @@ import {
   type McpEditableScope,
   type McpPatchServerInput,
   type McpScope,
+  type McpDoctorResult,
   type McpServerConfig,
-  type McpServerOrigin
+  type McpServerOrigin,
+  type McpServerStatusSnapshot
 } from "@ward/core";
 import type { Database } from "bun:sqlite";
-import { ensureWardLayout, resolveWardPaths, type WardPaths } from "./layout.ts";
+import { ensureWardLayout, resolveRepoRoot, resolveWardPaths, type WardPaths } from "./layout.ts";
 import { openWardDatabase } from "./migrations.ts";
+import { probeStdioMcpServer } from "./mcp-client.ts";
 import { resolveSecretString } from "./secrets.ts";
 
 type WorkspaceMcpRow = {
@@ -34,6 +40,24 @@ type WorkspaceRepoMcpRow = {
   id: number;
   local_path: string;
   is_primary: number;
+};
+
+type McpServerStatusRow = {
+  server_id: string;
+  workspace_id: number | null;
+  workspace_slug: string | null;
+  scope: McpScope;
+  origin_path: string;
+  transport: "stdio" | "http";
+  enabled: number;
+  status: "ok" | "error" | "disabled" | "unsupported";
+  tool_count: number;
+  tools_json: string;
+  error: string | null;
+  stderr_log_path: string | null;
+  checked_at: string;
+  duration_ms: number;
+  trace_id: string;
 };
 
 type McpLayer = {
@@ -175,6 +199,39 @@ function redactConfigFile(config: McpConfigFile): McpConfigFile {
       serverId,
       redactServerConfig(McpServerConfigSchema.parse(serverConfig))
     ]))
+  });
+}
+
+function safeLogName(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_.-]/g, "_");
+}
+
+function mcpLogPath(paths: WardPaths, serverId: string): string {
+  return join(paths.logsDir, "mcp", `${safeLogName(serverId)}.log`);
+}
+
+function redactionValues(config: McpServerConfig): string[] {
+  return [...Object.values(config.env), ...Object.values(config.headers)]
+    .filter((value) => value && !value.startsWith("secret://"));
+}
+
+function statusFromRow(row: McpServerStatusRow): McpServerStatusSnapshot {
+  return McpServerStatusSnapshotSchema.parse({
+    server_id: row.server_id,
+    workspace_id: row.workspace_id,
+    workspace_slug: row.workspace_slug,
+    scope: row.scope,
+    origin_path: row.origin_path,
+    transport: row.transport,
+    enabled: Boolean(row.enabled),
+    status: row.status,
+    tool_count: row.tool_count,
+    tools: JSON.parse(row.tools_json),
+    error: row.error,
+    stderr_log_path: row.stderr_log_path,
+    checked_at: row.checked_at,
+    duration_ms: row.duration_ms,
+    trace_id: row.trace_id
   });
 }
 
@@ -395,6 +452,211 @@ export async function deleteMcpServer(id: string, input: McpDeleteServerInput): 
     path: target.path,
     deleted
   };
+}
+
+function insertMcpServerStatus(db: Database, snapshot: McpServerStatusSnapshot): void {
+  db.query(`
+    INSERT INTO mcp_server_status (
+      server_id,
+      workspace_id,
+      workspace_slug,
+      scope,
+      origin_path,
+      transport,
+      enabled,
+      status,
+      tool_count,
+      tools_json,
+      error,
+      stderr_log_path,
+      checked_at,
+      duration_ms,
+      trace_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    snapshot.server_id,
+    snapshot.workspace_id,
+    snapshot.workspace_slug,
+    snapshot.scope,
+    snapshot.origin_path,
+    snapshot.transport,
+    snapshot.enabled ? 1 : 0,
+    snapshot.status,
+    snapshot.tool_count,
+    JSON.stringify(snapshot.tools),
+    snapshot.error,
+    snapshot.stderr_log_path,
+    snapshot.checked_at,
+    snapshot.duration_ms,
+    snapshot.trace_id
+  );
+}
+
+export function listMcpServerStatuses(workspaceRef?: string | number): McpServerStatusSnapshot[] {
+  return withDb((db) => {
+    const workspace = workspaceRef === undefined ? null : workspaceByRef(db, workspaceRef);
+    if (workspaceRef !== undefined && !workspace) {
+      throw new Error("Workspace not found");
+    }
+    const rows = workspace
+      ? db.query<McpServerStatusRow, [number]>(`
+          SELECT
+            server_id,
+            workspace_id,
+            workspace_slug,
+            scope,
+            origin_path,
+            transport,
+            enabled,
+            status,
+            tool_count,
+            tools_json,
+            error,
+            stderr_log_path,
+            checked_at,
+            duration_ms,
+            trace_id
+          FROM mcp_server_status
+          WHERE id IN (
+            SELECT MAX(id)
+            FROM mcp_server_status
+            WHERE workspace_id = ?
+            GROUP BY server_id, COALESCE(workspace_id, 0)
+          )
+          ORDER BY server_id ASC
+        `).all(workspace.id)
+      : db.query<McpServerStatusRow, []>(`
+          SELECT
+            server_id,
+            workspace_id,
+            workspace_slug,
+            scope,
+            origin_path,
+            transport,
+            enabled,
+            status,
+            tool_count,
+            tools_json,
+            error,
+            stderr_log_path,
+            checked_at,
+            duration_ms,
+            trace_id
+          FROM mcp_server_status
+          WHERE id IN (
+            SELECT MAX(id)
+            FROM mcp_server_status
+            GROUP BY server_id, COALESCE(workspace_id, 0)
+          )
+          ORDER BY workspace_slug ASC, server_id ASC
+        `).all();
+    return rows.map(statusFromRow);
+  });
+}
+
+export async function runMcpDoctor(input: {
+  workspace?: string | number;
+  timeout_ms?: number;
+} = {}): Promise<McpDoctorResult> {
+  const paths = resolveWardPaths();
+  await ensureWardLayout(paths);
+  const effective = await getEffectiveMcpConfig(input.workspace, { includeRepo: true, redact: false });
+  const db = openWardDatabase(paths);
+  const checks: McpServerStatusSnapshot[] = [];
+  try {
+    for (const server of effective.servers) {
+      const started = Date.now();
+      const traceId = createTraceId("mcp_doctor");
+      const base = {
+        server_id: server.id,
+        workspace_id: effective.workspace_id,
+        workspace_slug: effective.workspace_slug,
+        scope: server.origin.scope,
+        origin_path: server.origin.path,
+        transport: server.config.transport,
+        enabled: server.config.ward_enabled !== false,
+        checked_at: nowIso(),
+        trace_id: traceId
+      };
+
+      let snapshot: McpServerStatusSnapshot;
+      if (server.config.ward_enabled === false) {
+        snapshot = McpServerStatusSnapshotSchema.parse({
+          ...base,
+          status: "disabled",
+          tool_count: 0,
+          tools: [],
+          error: null,
+          stderr_log_path: null,
+          duration_ms: Date.now() - started
+        });
+      } else if (server.config.transport !== "stdio") {
+        snapshot = McpServerStatusSnapshotSchema.parse({
+          ...base,
+          status: "unsupported",
+          tool_count: 0,
+          tools: [],
+          error: "HTTP MCP lifecycle checks are deferred.",
+          stderr_log_path: null,
+          duration_ms: Date.now() - started
+        });
+      } else {
+        const resolved = await resolveMcpServerSecrets(server.config, server.origin);
+        const stderrLogPath = mcpLogPath(paths, server.id);
+        try {
+          const probe = await probeStdioMcpServer({
+            command: resolved.command!,
+            args: resolved.args,
+            env: resolved.env,
+            cwd: server.origin.repo_path ?? resolveRepoRoot(),
+            timeout_ms: input.timeout_ms,
+            stderr_log_path: stderrLogPath,
+            redaction_values: redactionValues(resolved)
+          });
+          snapshot = McpServerStatusSnapshotSchema.parse({
+            ...base,
+            status: "ok",
+            tool_count: probe.tools.length,
+            tools: probe.tools,
+            error: null,
+            stderr_log_path: probe.stderr_log_path,
+            duration_ms: Date.now() - started
+          });
+        } catch (error) {
+          snapshot = McpServerStatusSnapshotSchema.parse({
+            ...base,
+            status: "error",
+            tool_count: 0,
+            tools: [],
+            error: error instanceof Error ? error.message : String(error),
+            stderr_log_path: stderrLogPath,
+            duration_ms: Date.now() - started
+          });
+        }
+      }
+      insertMcpServerStatus(db, snapshot);
+      checks.push(snapshot);
+    }
+  } finally {
+    db.close();
+  }
+
+  const failed = checks.filter((check) => check.status === "error").length;
+  const passed = checks.filter((check) => check.status === "ok").length;
+  const skipped = checks.length - passed - failed;
+  return McpDoctorResultSchema.parse({
+    ok: failed === 0,
+    workspace_id: effective.workspace_id,
+    workspace_slug: effective.workspace_slug,
+    generated_at: nowIso(),
+    checks,
+    summary: {
+      total: checks.length,
+      passed,
+      failed,
+      skipped
+    }
+  });
 }
 
 export async function buildMcpSessionOverlay(workspaceSlug: string, ward: SessionOverlayWardOptions): Promise<{

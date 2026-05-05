@@ -83,6 +83,7 @@ import {
   listHarnessSessions,
   listBrainBudgetStatuses,
   listMcpScopeServers,
+  listMcpServerStatuses,
   listQuotaLedger,
   listWikiPages,
   listPreferences,
@@ -105,6 +106,7 @@ import {
   resolveWardPaths,
   recordWorkflowAgentSignal,
   runMigrations,
+  runMcpDoctor,
   runQaSupervisor,
   searchMemory,
   listSecrets,
@@ -709,6 +711,24 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
       const workspace = url.searchParams.get("workspace_id") ?? url.searchParams.get("workspace") ?? undefined;
       const includeRepo = url.searchParams.get("include_repo") !== "false";
       return json({ ok: true, effective: await getEffectiveMcpConfig(workspace, { includeRepo }) });
+    }
+
+    if (parts[0] === "mcp" && parts[1] === "servers" && req.method === "GET") {
+      const workspace = url.searchParams.get("workspace_id") ?? url.searchParams.get("workspace") ?? undefined;
+      return json({ ok: true, servers: listMcpServerStatuses(workspace) });
+    }
+
+    if (parts[0] === "mcp" && parts[1] === "doctor" && req.method === "POST") {
+      const body = req.headers.get("content-length") === "0" ? {} : await readJson(req).catch(() => ({}));
+      const workspace = (body as Record<string, unknown>).workspace ?? url.searchParams.get("workspace_id") ?? url.searchParams.get("workspace") ?? undefined;
+      const timeoutMs = Number((body as Record<string, unknown>).timeout_ms ?? url.searchParams.get("timeout_ms") ?? "5000");
+      return json({
+        ok: true,
+        doctor: await runMcpDoctor({
+          workspace: workspace === undefined || workspace === null ? undefined : String(workspace),
+          timeout_ms: Number.isFinite(timeoutMs) ? timeoutMs : undefined
+        })
+      });
     }
 
     if (parts[0] === "mcp" && parts[1] === "scopes" && parts[2] && parts[3] === "servers" && req.method === "GET") {

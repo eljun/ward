@@ -1087,6 +1087,35 @@ async function commandSecrets(args: string[]): Promise<CliResult> {
 
 async function commandMcp(args: string[]): Promise<CliResult> {
   const [subcommand = "list", ...rest] = args;
+  if (subcommand === "doctor") {
+    const parsed = parseFlags(rest);
+    const params = new URLSearchParams();
+    const workspace = stringFlag(parsed.flags, "workspace");
+    const timeoutMs = stringFlag(parsed.flags, "timeout-ms");
+    if (workspace) {
+      params.set("workspace", workspace);
+    }
+    if (timeoutMs) {
+      params.set("timeout_ms", timeoutMs);
+    }
+    const data = await apiRequest(`/api/mcp/doctor${params.size ? `?${params}` : ""}`, {
+      method: "POST",
+      body: "{}"
+    });
+    return { ok: true, command: "mcp doctor", timestamp: nowIso(), message: "WARD MCP doctor.", data };
+  }
+
+  if (subcommand === "servers") {
+    const parsed = parseFlags(rest);
+    const params = new URLSearchParams();
+    const workspace = stringFlag(parsed.flags, "workspace");
+    if (workspace) {
+      params.set("workspace", workspace);
+    }
+    const data = await apiRequest(`/api/mcp/servers${params.size ? `?${params}` : ""}`);
+    return { ok: true, command: "mcp servers", timestamp: nowIso(), message: "WARD MCP server status.", data };
+  }
+
   if (subcommand === "list") {
     const parsed = parseFlags(rest);
     const scope = stringFlag(parsed.flags, "scope") ?? "effective";
@@ -1171,7 +1200,7 @@ async function commandMcp(args: string[]): Promise<CliResult> {
     return { ok: true, command: "mcp remove", timestamp: nowIso(), message: "WARD MCP server removed.", data };
   }
 
-  throw new Error("Usage: ward mcp list|add|enable|disable|remove");
+  throw new Error("Usage: ward mcp list|servers|doctor|add|enable|disable|remove");
 }
 
 async function commandWorkflow(args: string[]): Promise<CliResult> {

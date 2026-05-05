@@ -12,6 +12,16 @@ export type McpTransport = z.infer<typeof McpTransportSchema>;
 export const McpToolClassSchema = z.enum(["read", "write", "destructive", "privileged"]);
 export type McpToolClass = z.infer<typeof McpToolClassSchema>;
 
+export const McpLifecycleStatusSchema = z.enum(["ok", "error", "disabled", "unsupported"]);
+export type McpLifecycleStatus = z.infer<typeof McpLifecycleStatusSchema>;
+
+export const McpToolSummarySchema = z.object({
+  name: z.string(),
+  description: z.string().optional(),
+  input_schema: z.unknown().optional()
+});
+export type McpToolSummary = z.infer<typeof McpToolSummarySchema>;
+
 export const McpServerConfigSchema = z.object({
   command: z.string().min(1).optional(),
   args: z.array(z.string()).optional().default([]),
@@ -92,6 +102,40 @@ export const EffectiveMcpConfigSchema = z.object({
   conflicts: z.array(McpConflictSchema)
 });
 export type EffectiveMcpConfig = z.infer<typeof EffectiveMcpConfigSchema>;
+
+export const McpServerStatusSnapshotSchema = z.object({
+  server_id: z.string(),
+  workspace_id: z.number().int().positive().nullable(),
+  workspace_slug: z.string().nullable(),
+  scope: McpScopeSchema,
+  origin_path: z.string(),
+  transport: McpTransportSchema,
+  enabled: z.boolean(),
+  status: McpLifecycleStatusSchema,
+  tool_count: z.number().int().nonnegative(),
+  tools: z.array(McpToolSummarySchema),
+  error: z.string().nullable(),
+  stderr_log_path: z.string().nullable(),
+  checked_at: z.string(),
+  duration_ms: z.number().int().nonnegative(),
+  trace_id: z.string()
+});
+export type McpServerStatusSnapshot = z.infer<typeof McpServerStatusSnapshotSchema>;
+
+export const McpDoctorResultSchema = z.object({
+  ok: z.boolean(),
+  workspace_id: z.number().int().positive().nullable(),
+  workspace_slug: z.string().nullable(),
+  generated_at: z.string(),
+  checks: z.array(McpServerStatusSnapshotSchema),
+  summary: z.object({
+    total: z.number().int().nonnegative(),
+    passed: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    skipped: z.number().int().nonnegative()
+  })
+});
+export type McpDoctorResult = z.infer<typeof McpDoctorResultSchema>;
 
 export const McpAddServerSchema = z.object({
   id: z.string().min(1).regex(/^[a-zA-Z0-9_.-]+$/, "server id may only contain letters, numbers, dot, underscore, and dash"),

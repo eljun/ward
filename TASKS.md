@@ -2,6 +2,22 @@
 
 ## Planned
 
+- [ ] `9D` MCP Tool Classification and Autonomy Policy
+  - Doc: [docs/task/009d-mcp-tool-classification-autonomy.md](docs/task/009d-mcp-tool-classification-autonomy.md)
+  - Goal: Classify MCP tools, apply overrides, expand capability profiles, and enforce autonomy/allowlist decisions before dispatch.
+
+- [ ] `9E` MCP Tool Proxy and Circuit Breakers
+  - Doc: [docs/task/009e-mcp-tool-proxy-circuit-breakers.md](docs/task/009e-mcp-tool-proxy-circuit-breakers.md)
+  - Goal: Dispatch allowed MCP tool calls through WARD policy, emit events, and freeze failing servers through quota-backed circuit breakers.
+
+- [ ] `9F` WARD as a Read-Only MCP Server
+  - Doc: [docs/task/009f-ward-mcp-server.md](docs/task/009f-ward-mcp-server.md)
+  - Goal: Expose WARD workspaces, sessions, plans, wiki, search, blockers, and status as read-only MCP tools over stdio.
+
+- [ ] `9G` Settings Connections UI
+  - Doc: [docs/task/009g-connections-ui.md](docs/task/009g-connections-ui.md)
+  - Goal: Add Settings -> Connections for scoped/effective MCP config, conflicts, server status, tool counts, and safe enable/disable.
+
 - [ ] `10` Inbound Remote Messaging
   - Doc: [docs/task/010-inbound-remote-messaging.md](docs/task/010-inbound-remote-messaging.md)
   - Goal: Slack Socket Mode + Telegram long-poll; signature verification; sender/command allowlist; Intervention round-trip; presence-aware routing; audit log.
@@ -23,6 +39,16 @@
 
 ## Testing
 
+- [ ] `9C` MCP Server Lifecycle and Doctor
+  - Doc: [docs/task/009c-mcp-server-lifecycle-doctor.md](docs/task/009c-mcp-server-lifecycle-doctor.md)
+  - Goal: Verify enabled stdio MCP servers, persist status snapshots, capture stderr logs, and expose `ward mcp doctor`.
+
+- Task 009C fresh init applies schema version 9 and creates `mcp_server_status`.
+- Task 009C fixture MCP server passes `ward mcp doctor` with two tools.
+- Task 009C `ward mcp servers` returns the persisted status snapshot.
+- Task 009C direct API smoke passes for `GET /api/mcp/servers` and `POST /api/mcp/doctor`.
+- Task 009C stderr log capture redacts the injected fixture token.
+- Task 009C invalid JSON, timeout, and missing executable fixtures report `status: error` without crashing runtime.
 - `bun install --frozen-lockfile`
 - `bun run build`
 - `WARD_HOME=/tmp/ward-codex-smoke bun run ward --json init`

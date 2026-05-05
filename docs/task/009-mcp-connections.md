@@ -207,3 +207,30 @@ fallback for deterministic/local environments, `ward secrets` CLI/API
 surfaces, doctor backend reporting, and MCP overlay resolution for
 `secret://` references. Live MCP server restarts on secret rotation remain
 deferred until the lifecycle slice.
+
+### Planned Remaining Slices
+
+- [009C MCP Server Lifecycle and Doctor](009c-mcp-server-lifecycle-doctor.md)
+  verifies enabled stdio servers, persists status snapshots, and adds
+  `ward mcp doctor`.
+- [009D MCP Tool Classification and Autonomy Policy](009d-mcp-tool-classification-autonomy.md)
+  classifies tools, applies overrides/capability profiles, and returns
+  permit/deny policy decisions.
+- [009E MCP Tool Proxy and Circuit Breakers](009e-mcp-tool-proxy-circuit-breakers.md)
+  dispatches allowed tool calls, emits MCP events, and freezes failing
+  servers through quota-backed breakers.
+- [009F WARD as a Read-Only MCP Server](009f-ward-mcp-server.md)
+  exposes WARD state as read-only MCP tools over stdio.
+- [009G Settings Connections UI](009g-connections-ui.md) adds the operator
+  UI for scoped/effective config, conflicts, status, and safe toggles.
+
+### MCP Server Lifecycle and Doctor Slice
+
+[009C MCP Server Lifecycle and Doctor](009c-mcp-server-lifecycle-doctor.md)
+adds schema version 9 MCP status snapshots, a minimal stdio JSON-RPC probe,
+a deterministic fixture MCP server, stderr log capture under
+`~/.ward/logs/mcp/`, `ward mcp doctor`, `ward mcp servers`, and runtime
+routes for `/api/mcp/servers` and `/api/mcp/doctor`. The slice verifies
+fixture success, invalid JSON failure reporting, API access, and redaction of
+resolved env/header values in stderr logs. Long-lived pools, tool invocation,
+circuit breakers, HTTP lifecycle checks, and UI remain in later slices.
