@@ -280,7 +280,7 @@ async function ensureSessionFiles(paths: HarnessSessionPaths, launch: HarnessLau
   await mkdir(paths.artifacts_dir, { recursive: true, mode: 0o700 });
   await writeFile(paths.task_contract_path, JSON.stringify(launch.task_contract, null, 2), "utf8");
   await writeFile(paths.context_packet_path, JSON.stringify(launch.context_packet, null, 2), "utf8");
-  await writeFile(paths.mcp_overlay_path, JSON.stringify(mcpOverlay, null, 2), "utf8");
+  await writeFile(paths.mcp_overlay_path, JSON.stringify(mcpOverlay, null, 2), { encoding: "utf8", mode: 0o600 });
   await writeFile(paths.events_path, "", "utf8");
   await writeFile(paths.pty_raw_path, "", "utf8");
 }

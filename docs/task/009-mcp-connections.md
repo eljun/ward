@@ -198,3 +198,12 @@ Task 009 starts with [009A MCP Registry Foundation](009a-mcp-registry-foundation
 the scoped `.mcp.json` reader/writer, effective merge, redacted API/CLI
 surfaces, and harness overlay handoff. Real server lifecycle, secret keychain
 resolution, tool proxying, and WARD-as-MCP-server remain in later slices.
+
+### Secrets and macOS Keychain Fallback Slice
+
+[009B Secrets and macOS Keychain Fallback](009b-secrets-keychain-fallback.md)
+adds scoped secret storage, macOS Keychain as the default backend, file
+fallback for deterministic/local environments, `ward secrets` CLI/API
+surfaces, doctor backend reporting, and MCP overlay resolution for
+`secret://` references. Live MCP server restarts on secret rotation remain
+deferred until the lifecycle slice.

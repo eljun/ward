@@ -24,7 +24,8 @@ import {
   runMigrations,
   checkMemoryGit,
   warmCacheStats,
-  ensureBrainRegistry
+  ensureBrainRegistry,
+  getSecretBackendStatus
 } from "@ward/memory";
 import { openWardDatabase } from "@ward/memory";
 
@@ -161,6 +162,21 @@ function keyValueFlags(flags: Record<string, string | boolean | string[]>, key: 
     }
     return [value.slice(0, separator), value.slice(separator + 1)];
   }));
+}
+
+async function secretValueFlag(flags: Record<string, string | boolean | string[]>): Promise<string> {
+  const value = stringFlag(flags, "value");
+  if (value !== undefined) {
+    return value;
+  }
+  if (flags.stdin === true) {
+    const stdin = (await Bun.stdin.text()).trimEnd();
+    if (!stdin) {
+      throw new Error("Secret value from stdin was empty");
+    }
+    return stdin;
+  }
+  throw new Error("Provide --value <secret> or --stdin");
 }
 
 function nullableNumberFlag(flags: Record<string, string | boolean | string[]>, key: string): number | null | undefined {
@@ -557,10 +573,11 @@ async function commandDoctor(args: string[] = []): Promise<CliResult> {
     checks.push({ name: "memory_git", status: "fail", detail: error instanceof Error ? error.message : String(error) });
   }
 
+  const secretBackend = getSecretBackendStatus();
   checks.push({
-    name: "keychain",
-    status: commandExists("security") ? "pass" : "warn",
-    detail: commandExists("security") ? "macOS security CLI available; keychain integration lands in 009" : "security CLI missing"
+    name: "secrets_backend",
+    status: secretBackend.available ? "pass" : "warn",
+    detail: `${secretBackend.backend}${secretBackend.forced ? " forced" : ""}: ${secretBackend.detail}`
   });
 
   for (const command of ["claude", "codex"]) {
@@ -1003,6 +1020,69 @@ async function commandQuota(args: string[]): Promise<CliResult> {
     return { ok: true, command: "quota list", timestamp: nowIso(), message: "WARD quota ledger.", data };
   }
   throw new Error("Usage: ward quota list [--limit <n>]");
+}
+
+async function commandSecrets(args: string[]): Promise<CliResult> {
+  const [subcommand = "list", ...rest] = args;
+  if (subcommand === "list") {
+    const parsed = parseFlags(rest);
+    const params = new URLSearchParams();
+    const scope = stringFlag(parsed.flags, "scope");
+    const workspace = stringFlag(parsed.flags, "workspace");
+    if (scope) {
+      params.set("scope", scope);
+    }
+    if (workspace) {
+      params.set("workspace", workspace);
+    }
+    const data = await apiRequest(`/api/secrets${params.size ? `?${params}` : ""}`);
+    return { ok: true, command: "secrets list", timestamp: nowIso(), message: "WARD secrets.", data };
+  }
+  if (subcommand === "set" || subcommand === "rotate") {
+    const parsed = parseFlags(rest);
+    const [name] = parsed.positional;
+    if (!name) {
+      throw new Error(`Usage: ward secrets ${subcommand} <name> [--scope global|workspace] [--workspace <slug>] --value <secret>|--stdin`);
+    }
+    const body = {
+      name,
+      scope: stringFlag(parsed.flags, "scope") ?? "global",
+      workspace: stringFlag(parsed.flags, "workspace"),
+      value: await secretValueFlag(parsed.flags)
+    };
+    const path = subcommand === "rotate"
+      ? `/api/secrets/${encodeURIComponent(name)}/rotate`
+      : "/api/secrets";
+    const data = await apiRequest(path, {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
+    return {
+      ok: true,
+      command: `secrets ${subcommand}`,
+      timestamp: nowIso(),
+      message: `WARD secret ${subcommand === "set" ? "stored" : "rotated"}.`,
+      data
+    };
+  }
+  if (subcommand === "unset") {
+    const parsed = parseFlags(rest);
+    const [name] = parsed.positional;
+    if (!name) {
+      throw new Error("Usage: ward secrets unset <name> [--scope global|workspace] [--workspace <slug>]");
+    }
+    const params = new URLSearchParams();
+    params.set("scope", stringFlag(parsed.flags, "scope") ?? "global");
+    const workspace = stringFlag(parsed.flags, "workspace");
+    if (workspace) {
+      params.set("workspace", workspace);
+    }
+    const data = await apiRequest(`/api/secrets/${encodeURIComponent(name)}?${params}`, {
+      method: "DELETE"
+    });
+    return { ok: true, command: "secrets unset", timestamp: nowIso(), message: "WARD secret removed.", data };
+  }
+  throw new Error("Usage: ward secrets list|set|unset|rotate");
 }
 
 async function commandMcp(args: string[]): Promise<CliResult> {
@@ -1509,6 +1589,8 @@ async function dispatch(args: string[]): Promise<CliResult> {
       return commandCost(rest);
     case "quota":
       return commandQuota(rest);
+    case "secrets":
+      return commandSecrets(rest);
     case "mcp":
       return commandMcp(rest);
     case "workflow":

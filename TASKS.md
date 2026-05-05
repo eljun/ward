@@ -19,7 +19,7 @@
 - [ ] `9` MCP Connections Layer
   - Doc: [docs/task/009-mcp-connections.md](docs/task/009-mcp-connections.md)
   - Goal: Three-scope MCP registry (global / workspace / repo, reuses `.mcp.json`); secrets via OS keychain; tool routing; autonomy-class policy; WARD-as-MCP-server.
-  - Current slice: 009B Secrets and macOS Keychain fallback.
+  - Current slice: 009C MCP server lifecycle and doctor.
 
 ## Testing
 
@@ -161,8 +161,13 @@
 - Task 008D budget caps persist through `ward brain budget`, cost forecast reports cap limits, over-cap launches fall back to `stub-worker`, and no-fallback over-cap launches reject clearly.
 - Task 008E workflow signals persist agent artifacts for task/implement/test, QA Supervisor rejects missing direct evidence, and passes once a matching `test_report` artifact exists.
 - Task 009A MCP registry foundation merges global/workspace/repo `.mcp.json` with repo precedence, reports conflicts, redacts scoped/effective output, mutates global/workspace servers, and writes harness overlays from global + workspace scopes.
+- Task 009B secrets set/list/unset/rotate works with file fallback, doctor reports the backend, MCP overlays resolve workspace secrets, rotation updates overlays, and workspace unset falls back to global.
 
 ## Done
+
+- [x] `9B` Secrets and macOS Keychain Fallback
+  - Doc: [docs/task/009b-secrets-keychain-fallback.md](docs/task/009b-secrets-keychain-fallback.md)
+  - Goal: Add scoped secrets, macOS Keychain default, file fallback, CLI/API surfaces, and MCP overlay secret resolution.
 
 - [x] `9A` MCP Registry Foundation
   - Doc: [docs/task/009a-mcp-registry-foundation.md](docs/task/009a-mcp-registry-foundation.md)

@@ -114,3 +114,40 @@ export const McpDeleteServerSchema = z.object({
 });
 export type McpDeleteServerInput = z.input<typeof McpDeleteServerSchema>;
 
+export const SecretScopeSchema = z.enum(["global", "workspace"]);
+export type SecretScope = z.infer<typeof SecretScopeSchema>;
+
+export const SecretBackendSchema = z.enum(["keychain", "file"]);
+export type SecretBackend = z.infer<typeof SecretBackendSchema>;
+
+export const SecretSetSchema = z.object({
+  name: z.string().min(1).regex(/^[a-zA-Z0-9_.-]+$/, "secret name may only contain letters, numbers, dot, underscore, and dash"),
+  scope: SecretScopeSchema.optional().default("global"),
+  workspace: z.string().optional(),
+  value: z.string().min(1)
+});
+export type SecretSetInput = z.input<typeof SecretSetSchema>;
+
+export const SecretSelectorSchema = z.object({
+  scope: SecretScopeSchema.optional().default("global"),
+  workspace: z.string().optional()
+});
+export type SecretSelectorInput = z.input<typeof SecretSelectorSchema>;
+
+export const SecretEntrySchema = z.object({
+  name: z.string(),
+  scope: SecretScopeSchema,
+  workspace: z.string().nullable(),
+  key: z.string(),
+  backend: SecretBackendSchema,
+  updated_at: z.string()
+});
+export type SecretEntry = z.infer<typeof SecretEntrySchema>;
+
+export const SecretBackendStatusSchema = z.object({
+  backend: SecretBackendSchema,
+  forced: z.boolean(),
+  available: z.boolean(),
+  detail: z.string()
+});
+export type SecretBackendStatus = z.infer<typeof SecretBackendStatusSchema>;

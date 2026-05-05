@@ -19,6 +19,8 @@ import {
   AnswerPlanSchema,
   RevisePlanSchema,
   SearchQuerySchema,
+  SecretSelectorSchema,
+  SecretSetSchema,
   SimulateSessionSchema,
   StartPlanSchema,
   TransitionTaskSchema,
@@ -105,7 +107,10 @@ import {
   runMigrations,
   runQaSupervisor,
   searchMemory,
+  listSecrets,
+  rotateSecret,
   setPreference,
+  setSecret,
   setHarnessWorkerPid,
   markHarnessQueueTerminal,
   addMcpServer,
@@ -122,6 +127,7 @@ import {
   patchMcpServer,
   transitionHarnessSession,
   transitionTask,
+  unsetSecret,
   updateProfile,
   updateWorkspace,
   warmCacheStats,
@@ -676,6 +682,27 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
 
     if (parts[0] === "quota" && req.method === "GET") {
       return json({ ok: true, ledger: listQuotaLedger(Number(url.searchParams.get("limit") ?? "50")) });
+    }
+
+    if (parts[0] === "secrets" && req.method === "GET" && !parts[1]) {
+      const scope = url.searchParams.get("scope") ?? undefined;
+      const workspace = url.searchParams.get("workspace") ?? undefined;
+      return json({ ok: true, ...await listSecrets({ scope: scope as "global" | "workspace" | undefined, workspace }) });
+    }
+
+    if (parts[0] === "secrets" && req.method === "POST" && !parts[1]) {
+      return json({ ok: true, secret: await setSecret(SecretSetSchema.parse(await readJson(req))) }, 201);
+    }
+
+    if (parts[0] === "secrets" && parts[1] && parts[2] === "rotate" && req.method === "POST") {
+      const body = await readJson(req) as Record<string, unknown>;
+      return json({ ok: true, secret: await rotateSecret(SecretSetSchema.parse({ ...body, name: parts[1] })) });
+    }
+
+    if (parts[0] === "secrets" && parts[1] && req.method === "DELETE" && !parts[2]) {
+      const scope = url.searchParams.get("scope") ?? "global";
+      const workspace = url.searchParams.get("workspace") ?? undefined;
+      return json({ ok: true, secret: await unsetSecret(parts[1], SecretSelectorSchema.parse({ scope, workspace })) });
     }
 
     if (parts[0] === "mcp" && parts[1] === "effective" && req.method === "GET") {

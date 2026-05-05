@@ -22,6 +22,7 @@ import {
 import type { Database } from "bun:sqlite";
 import { ensureWardLayout, resolveWardPaths, type WardPaths } from "./layout.ts";
 import { openWardDatabase } from "./migrations.ts";
+import { resolveSecretString } from "./secrets.ts";
 
 type WorkspaceMcpRow = {
   id: number;
@@ -182,6 +183,24 @@ function conflictReason(winner: McpServerOrigin, shadowed: McpServerOrigin): str
     return "primary repo wins over another linked repo";
   }
   return `${winner.scope} scope overrides ${shadowed.scope} scope`;
+}
+
+async function resolveSecretRecord(values: Record<string, string>, origin: McpServerOrigin): Promise<Record<string, string>> {
+  const selector = origin.scope === "global"
+    ? { scope: "global" as const }
+    : { scope: "workspace" as const, workspace: origin.workspace_slug };
+  return Object.fromEntries(await Promise.all(Object.entries(values).map(async ([key, value]) => [
+    key,
+    await resolveSecretString(value, selector)
+  ])));
+}
+
+async function resolveMcpServerSecrets(config: McpServerConfig, origin: McpServerOrigin): Promise<McpServerConfig> {
+  return McpServerConfigSchema.parse({
+    ...config,
+    env: await resolveSecretRecord(config.env, origin),
+    headers: await resolveSecretRecord(config.headers, origin)
+  });
 }
 
 function mergeLayers(layers: McpLayer[], redact: boolean): EffectiveMcpConfig["servers"] {
@@ -383,10 +402,12 @@ export async function buildMcpSessionOverlay(workspaceSlug: string, ward: Sessio
   ward: SessionOverlayWardOptions;
 }> {
   const effective = await getEffectiveMcpConfig(workspaceSlug, { includeRepo: false, redact: false });
+  const enabledServers = effective.servers.filter((server) => server.config.ward_enabled !== false);
   return {
-    mcpServers: Object.fromEntries(effective.servers
-      .filter((server) => server.config.ward_enabled !== false)
-      .map((server) => [server.id, server.config])),
+    mcpServers: Object.fromEntries(await Promise.all(enabledServers.map(async (server) => [
+      server.id,
+      await resolveMcpServerSecrets(server.config, server.origin)
+    ]))),
     ward
   };
 }
