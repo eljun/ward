@@ -1,6 +1,6 @@
 # Task 008: Real Agent Adapters and Cost Ledger
 
-- Status: `in_progress`
+- Status: `done`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `high`
@@ -14,6 +14,12 @@ alternatives via Brain Registry. Wire the cost ledger with three accounting
 modes (subscription / api / local). Connect real adapters to the
 Agent Contract scaffolding from 007 so workflow-skills phases produce
 compact signals and hard-memory artifacts.
+
+Phase-1 closure: WARD now has Claude/Codex CLI adapter harnesses,
+subscription accounting, Brain Registry routing, budget fallback, the orb
+operator shell, deterministic chat routing, and workflow QA evidence
+bridging. SDK/API/local execution remains a documented optional follow-up
+instead of a blocker for the Task 009 MCP layer.
 
 ## In Scope
 

@@ -153,6 +153,16 @@ function artifactFlags(flags: Record<string, string | boolean | string[]>) {
   });
 }
 
+function keyValueFlags(flags: Record<string, string | boolean | string[]>, key: string): Record<string, string> {
+  return Object.fromEntries(listFlag(flags, key).map((value) => {
+    const separator = value.indexOf("=");
+    if (separator === -1) {
+      throw new Error(`Expected --${key} KEY=value`);
+    }
+    return [value.slice(0, separator), value.slice(separator + 1)];
+  }));
+}
+
 function nullableNumberFlag(flags: Record<string, string | boolean | string[]>, key: string): number | null | undefined {
   const value = stringFlag(flags, key);
   if (value === undefined) {
@@ -995,6 +1005,95 @@ async function commandQuota(args: string[]): Promise<CliResult> {
   throw new Error("Usage: ward quota list [--limit <n>]");
 }
 
+async function commandMcp(args: string[]): Promise<CliResult> {
+  const [subcommand = "list", ...rest] = args;
+  if (subcommand === "list") {
+    const parsed = parseFlags(rest);
+    const scope = stringFlag(parsed.flags, "scope") ?? "effective";
+    const workspace = stringFlag(parsed.flags, "workspace");
+    if (scope === "effective") {
+      const params = new URLSearchParams();
+      if (workspace) {
+        params.set("workspace", workspace);
+      }
+      const data = await apiRequest(`/api/mcp/effective${params.size ? `?${params}` : ""}`);
+      return { ok: true, command: "mcp list", timestamp: nowIso(), message: "WARD MCP effective config.", data };
+    }
+    const params = new URLSearchParams();
+    if (workspace) {
+      params.set("workspace", workspace);
+    }
+    const data = await apiRequest(`/api/mcp/scopes/${encodeURIComponent(scope)}/servers${params.size ? `?${params}` : ""}`);
+    return { ok: true, command: "mcp list", timestamp: nowIso(), message: `WARD MCP ${scope} config.`, data };
+  }
+
+  if (subcommand === "add") {
+    const parsed = parseFlags(rest);
+    const [serverId] = parsed.positional;
+    const scope = stringFlag(parsed.flags, "scope") ?? "global";
+    const command = stringFlag(parsed.flags, "command");
+    const url = stringFlag(parsed.flags, "url");
+    const transport = stringFlag(parsed.flags, "transport") ?? (url ? "http" : "stdio");
+    const toolScopes = listFlag(parsed.flags, "tool-scope");
+    if (!serverId) {
+      throw new Error("Usage: ward mcp add <id> --scope global|workspace [--workspace <slug>] --command <cmd>|--url <url>");
+    }
+    const body = {
+      id: serverId,
+      workspace: stringFlag(parsed.flags, "workspace"),
+      config: {
+        command,
+        args: listFlag(parsed.flags, "arg"),
+        env: keyValueFlags(parsed.flags, "env"),
+        transport,
+        url,
+        headers: keyValueFlags(parsed.flags, "header"),
+        ward_tool_scopes: toolScopes.length > 0 ? toolScopes : undefined,
+        ward_enabled: parsed.flags.disabled === true ? false : true,
+        ward_capability_profiles: listFlag(parsed.flags, "capability")
+      }
+    };
+    const data = await apiRequest(`/api/mcp/scopes/${encodeURIComponent(scope)}/servers`, {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
+    return { ok: true, command: "mcp add", timestamp: nowIso(), message: "WARD MCP server added.", data };
+  }
+
+  if (subcommand === "enable" || subcommand === "disable") {
+    const parsed = parseFlags(rest);
+    const [serverId] = parsed.positional;
+    const scope = stringFlag(parsed.flags, "scope") ?? "global";
+    if (!serverId) {
+      throw new Error(`Usage: ward mcp ${subcommand} <id> --scope global|workspace [--workspace <slug>]`);
+    }
+    const data = await apiRequest(`/api/mcp/scopes/${encodeURIComponent(scope)}/servers/${encodeURIComponent(serverId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        workspace: stringFlag(parsed.flags, "workspace"),
+        patch: { ward_enabled: subcommand === "enable" }
+      })
+    });
+    return { ok: true, command: `mcp ${subcommand}`, timestamp: nowIso(), message: `WARD MCP server ${subcommand}d.`, data };
+  }
+
+  if (subcommand === "remove") {
+    const parsed = parseFlags(rest);
+    const [serverId] = parsed.positional;
+    const scope = stringFlag(parsed.flags, "scope") ?? "global";
+    if (!serverId) {
+      throw new Error("Usage: ward mcp remove <id> --scope global|workspace [--workspace <slug>]");
+    }
+    const data = await apiRequest(`/api/mcp/scopes/${encodeURIComponent(scope)}/servers/${encodeURIComponent(serverId)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ workspace: stringFlag(parsed.flags, "workspace") })
+    });
+    return { ok: true, command: "mcp remove", timestamp: nowIso(), message: "WARD MCP server removed.", data };
+  }
+
+  throw new Error("Usage: ward mcp list|add|enable|disable|remove");
+}
+
 async function commandWorkflow(args: string[]): Promise<CliResult> {
   const [subcommand, taskId, ...rest] = args;
   if (!subcommand || !taskId) {
@@ -1410,6 +1509,8 @@ async function dispatch(args: string[]): Promise<CliResult> {
       return commandCost(rest);
     case "quota":
       return commandQuota(rest);
+    case "mcp":
+      return commandMcp(rest);
     case "workflow":
       return commandWorkflow(rest);
     case "plan":

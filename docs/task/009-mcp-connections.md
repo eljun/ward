@@ -1,6 +1,6 @@
 # Task 009: MCP Connections Layer
 
-- Status: `planned`
+- Status: `in_progress`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `high`
@@ -189,3 +189,12 @@ and WARD-as-MCP-server (read-only).
 - MCP server version drift: contract tests pin minimal compatible versions.
 - Large tool lists slow Brain prompt: per-mode tool-class filtering keeps
   prompts compact.
+
+## Implementation Notes
+
+### MCP Registry Foundation Slice
+
+Task 009 starts with [009A MCP Registry Foundation](009a-mcp-registry-foundation.md):
+the scoped `.mcp.json` reader/writer, effective merge, redacted API/CLI
+surfaces, and harness overlay handoff. Real server lifecycle, secret keychain
+resolution, tool proxying, and WARD-as-MCP-server remain in later slices.

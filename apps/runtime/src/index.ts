@@ -7,6 +7,11 @@ import {
   BrainBudgetPatchSchema,
   CreateTaskSchema,
   CreateWorkspaceSchema,
+  McpAddServerSchema,
+  McpDeleteServerSchema,
+  McpEditableScopeSchema,
+  McpPatchServerSchema,
+  McpScopeSchema,
   OpenGateSchema,
   ProfilePatchSchema,
   QaSupervisorInputSchema,
@@ -64,6 +69,7 @@ import {
   getBrainRegistry,
   getCostForecast,
   getCostLedgerToday,
+  getEffectiveMcpConfig,
   claimReadyHarnessSessions,
   getHarnessSession,
   getHarnessSessionDetail,
@@ -74,6 +80,7 @@ import {
   listHarnessQueue,
   listHarnessSessions,
   listBrainBudgetStatuses,
+  listMcpScopeServers,
   listQuotaLedger,
   listWikiPages,
   listPreferences,
@@ -101,6 +108,8 @@ import {
   setPreference,
   setHarnessWorkerPid,
   markHarnessQueueTerminal,
+  addMcpServer,
+  deleteMcpServer,
   refreshWorkspaceSnapshots,
   recordCostLedgerEntry,
   finalizeHarnessSession,
@@ -110,6 +119,7 @@ import {
   setBrainEnabled,
   setBrainBudgetCaps,
   setBrainRoute,
+  patchMcpServer,
   transitionHarnessSession,
   transitionTask,
   updateProfile,
@@ -666,6 +676,35 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
 
     if (parts[0] === "quota" && req.method === "GET") {
       return json({ ok: true, ledger: listQuotaLedger(Number(url.searchParams.get("limit") ?? "50")) });
+    }
+
+    if (parts[0] === "mcp" && parts[1] === "effective" && req.method === "GET") {
+      const workspace = url.searchParams.get("workspace_id") ?? url.searchParams.get("workspace") ?? undefined;
+      const includeRepo = url.searchParams.get("include_repo") !== "false";
+      return json({ ok: true, effective: await getEffectiveMcpConfig(workspace, { includeRepo }) });
+    }
+
+    if (parts[0] === "mcp" && parts[1] === "scopes" && parts[2] && parts[3] === "servers" && req.method === "GET") {
+      const scope = McpScopeSchema.parse(parts[2]);
+      return json({ ok: true, ...await listMcpScopeServers(scope, url.searchParams.get("workspace") ?? undefined) });
+    }
+
+    if (parts[0] === "mcp" && parts[1] === "scopes" && parts[2] && parts[3] === "servers" && req.method === "POST") {
+      const scope = McpEditableScopeSchema.parse(parts[2]);
+      const body = await readJson(req) as Record<string, unknown>;
+      return json({ ok: true, server: await addMcpServer(McpAddServerSchema.parse({ ...body, scope })) }, 201);
+    }
+
+    if (parts[0] === "mcp" && parts[1] === "scopes" && parts[2] && parts[3] === "servers" && parts[4] && req.method === "PATCH") {
+      const scope = McpEditableScopeSchema.parse(parts[2]);
+      const body = await readJson(req) as Record<string, unknown>;
+      return json({ ok: true, server: await patchMcpServer(parts[4], McpPatchServerSchema.parse({ ...body, scope })) });
+    }
+
+    if (parts[0] === "mcp" && parts[1] === "scopes" && parts[2] && parts[3] === "servers" && parts[4] && req.method === "DELETE") {
+      const scope = McpEditableScopeSchema.parse(parts[2]);
+      const body = req.headers.get("content-length") === "0" ? {} : await readJson(req).catch(() => ({}));
+      return json({ ok: true, server: await deleteMcpServer(parts[4], McpDeleteServerSchema.parse({ ...(body as Record<string, unknown>), scope })) });
     }
 
     if (parts[0] === "overview" && req.method === "GET") {

@@ -29,6 +29,7 @@ import { ensureWardLayout, resolveWardPaths, type WardPaths } from "./layout.ts"
 import { openWardDatabase } from "./migrations.ts";
 import { ensureMemoryBootstrap } from "./wiki.ts";
 import { getBrain, resolveBrainBudget } from "./brains.ts";
+import { buildMcpSessionOverlay } from "./mcp.ts";
 
 type WorkspaceRow = {
   id: number;
@@ -274,21 +275,12 @@ function buildContextPacket(db: Database, workspace: WorkspaceRow, task: TaskRow
   });
 }
 
-async function ensureSessionFiles(paths: HarnessSessionPaths, launch: HarnessLaunch): Promise<void> {
+async function ensureSessionFiles(paths: HarnessSessionPaths, launch: HarnessLaunch, mcpOverlay: unknown): Promise<void> {
   await mkdir(paths.session_dir, { recursive: true, mode: 0o700 });
   await mkdir(paths.artifacts_dir, { recursive: true, mode: 0o700 });
   await writeFile(paths.task_contract_path, JSON.stringify(launch.task_contract, null, 2), "utf8");
   await writeFile(paths.context_packet_path, JSON.stringify(launch.context_packet, null, 2), "utf8");
-  await writeFile(paths.mcp_overlay_path, JSON.stringify({
-    mcpServers: {},
-    ward: {
-      allowed_tools: launch.allowed_tools,
-      autonomy_level: launch.autonomy_level,
-      incognito: launch.incognito,
-      timeouts: launch.timeouts,
-      generated_at: launch.created_at
-    }
-  }, null, 2), "utf8");
+  await writeFile(paths.mcp_overlay_path, JSON.stringify(mcpOverlay, null, 2), "utf8");
   await writeFile(paths.events_path, "", "utf8");
   await writeFile(paths.pty_raw_path, "", "utf8");
 }
@@ -453,7 +445,14 @@ export async function prepareHarnessLaunch(input: unknown): Promise<{ session: H
       scenario: parsed.scenario
     });
     const filePaths = sessionPaths(paths, sessionId);
-    await ensureSessionFiles(filePaths, launch);
+    const mcpOverlay = await buildMcpSessionOverlay(workspace.slug, {
+      allowed_tools: launch.allowed_tools,
+      autonomy_level: launch.autonomy_level,
+      incognito: launch.incognito,
+      timeouts: launch.timeouts,
+      generated_at: launch.created_at
+    });
+    await ensureSessionFiles(filePaths, launch, mcpOverlay);
 
     db.query(`
       INSERT INTO session (

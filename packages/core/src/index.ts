@@ -8,3 +8,4 @@ export * from "./warm/index.ts";
 export * from "./plan/index.ts";
 export * from "./harness/index.ts";
 export * from "./brains/index.ts";
+export * from "./mcp/index.ts";

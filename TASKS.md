@@ -2,10 +2,6 @@
 
 ## Planned
 
-- [ ] `9` MCP Connections Layer
-  - Doc: [docs/task/009-mcp-connections.md](docs/task/009-mcp-connections.md)
-  - Goal: Three-scope MCP registry (global / workspace / repo, reuses `.mcp.json`); secrets via OS keychain; tool routing; autonomy-class policy; WARD-as-MCP-server.
-
 - [ ] `10` Inbound Remote Messaging
   - Doc: [docs/task/010-inbound-remote-messaging.md](docs/task/010-inbound-remote-messaging.md)
   - Goal: Slack Socket Mode + Telegram long-poll; signature verification; sender/command allowlist; Intervention round-trip; presence-aware routing; audit log.
@@ -20,10 +16,10 @@
 
 ## In Progress
 
-- [ ] `8` Real Agent Adapters and Cost Ledger
-  - Doc: [docs/task/008-real-agent-adapters.md](docs/task/008-real-agent-adapters.md)
-  - Goal: Claude Code + Codex CLI adapters (subscription auth default); SDK / API / local opt-ins; full cost ledger with three accounting modes.
-  - Current slice: Phase-1 complete; SDK/API/local execution remains optional/deferred before Task 009.
+- [ ] `9` MCP Connections Layer
+  - Doc: [docs/task/009-mcp-connections.md](docs/task/009-mcp-connections.md)
+  - Goal: Three-scope MCP registry (global / workspace / repo, reuses `.mcp.json`); secrets via OS keychain; tool routing; autonomy-class policy; WARD-as-MCP-server.
+  - Current slice: 009B Secrets and macOS Keychain fallback.
 
 ## Testing
 
@@ -164,8 +160,17 @@
 - Task 008C Settings backing APIs return Brain Registry, cost forecast, cost summary, quota ledger, and persist brain enable/disable plus route updates.
 - Task 008D budget caps persist through `ward brain budget`, cost forecast reports cap limits, over-cap launches fall back to `stub-worker`, and no-fallback over-cap launches reject clearly.
 - Task 008E workflow signals persist agent artifacts for task/implement/test, QA Supervisor rejects missing direct evidence, and passes once a matching `test_report` artifact exists.
+- Task 009A MCP registry foundation merges global/workspace/repo `.mcp.json` with repo precedence, reports conflicts, redacts scoped/effective output, mutates global/workspace servers, and writes harness overlays from global + workspace scopes.
 
 ## Done
+
+- [x] `9A` MCP Registry Foundation
+  - Doc: [docs/task/009a-mcp-registry-foundation.md](docs/task/009a-mcp-registry-foundation.md)
+  - Goal: Add scoped `.mcp.json` config, effective merge, redacted API/CLI surfaces, and harness overlay handoff.
+
+- [x] `8` Real Agent Adapters and Cost Ledger
+  - Doc: [docs/task/008-real-agent-adapters.md](docs/task/008-real-agent-adapters.md)
+  - Goal: Claude Code + Codex CLI adapters, Brain Registry, budget/cost ledger, WARD orb shell, and workflow QA bridge. SDK/API/local execution remains deferred as optional follow-up.
 
 - [x] `8E` Workflow Skills Bridge and QA Supervisor Stub
   - Doc: [docs/task/008e-workflow-skills-qa-supervisor.md](docs/task/008e-workflow-skills-qa-supervisor.md)
