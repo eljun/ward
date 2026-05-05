@@ -2,10 +2,6 @@
 
 ## Planned
 
-- [ ] `9E` MCP Tool Proxy and Circuit Breakers
-  - Doc: [docs/task/009e-mcp-tool-proxy-circuit-breakers.md](docs/task/009e-mcp-tool-proxy-circuit-breakers.md)
-  - Goal: Dispatch allowed MCP tool calls through WARD policy, emit events, and freeze failing servers through quota-backed circuit breakers.
-
 - [ ] `9F` WARD as a Read-Only MCP Server
   - Doc: [docs/task/009f-ward-mcp-server.md](docs/task/009f-ward-mcp-server.md)
   - Goal: Expose WARD workspaces, sessions, plans, wiki, search, blockers, and status as read-only MCP tools over stdio.
@@ -31,9 +27,21 @@
 - [ ] `9` MCP Connections Layer
   - Doc: [docs/task/009-mcp-connections.md](docs/task/009-mcp-connections.md)
   - Goal: Three-scope MCP registry (global / workspace / repo, reuses `.mcp.json`); secrets via OS keychain; tool routing; autonomy-class policy; WARD-as-MCP-server.
-  - Current slice: 009D MCP tool classification and autonomy policy.
+  - Current slice: 009E MCP tool proxy and circuit breakers.
 
 ## Testing
+
+- [ ] `9E` MCP Tool Proxy and Circuit Breakers
+  - Doc: [docs/task/009e-mcp-tool-proxy-circuit-breakers.md](docs/task/009e-mcp-tool-proxy-circuit-breakers.md)
+  - Goal: Dispatch allowed MCP tool calls through WARD policy, emit events, and freeze failing servers through quota-backed circuit breakers.
+
+- Task 009E allowed fixture `tools/call` reaches the MCP fixture server and returns a result.
+- Task 009E allowlist/autonomy denials return synthetic `tool_not_allowed` before dispatch.
+- Task 009E repeated fixture failures open the MCP server circuit breaker.
+- Task 009E open breaker returns synthetic `server_unavailable`.
+- Task 009E `ward quota unfreeze mcp_server <server>` clears the open breaker.
+- Task 009E `quota_ledger` records MCP request, failure, freeze, and unfreeze rows.
+- Task 009E MCP event payloads and stderr logs redact injected token values.
 
 - [ ] `9D` MCP Tool Classification and Autonomy Policy
   - Doc: [docs/task/009d-mcp-tool-classification-autonomy.md](docs/task/009d-mcp-tool-classification-autonomy.md)

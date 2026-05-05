@@ -1,6 +1,6 @@
 # Task 009E: MCP Tool Proxy and Circuit Breakers
 
-- Status: `planned`
+- Status: `testing`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `high`
@@ -91,3 +91,86 @@ synthetic denial/unavailable result when WARD refuses or freezes a call.
 - `ward quota unfreeze` smoke
 - inspect quota ledger and MCP events for redaction
 
+## Implementation Notes
+
+### What Changed
+
+- Added MCP tool invocation, result, synthetic unavailable, and breaker status
+  contracts.
+- Added stdio `tools/call` support by reusing the 009C initialize flow.
+- Added fixture `tools/call` support plus deterministic failure modes.
+- Added `callMcpToolThroughProxy` to enforce the 009D policy decision before
+  dispatch.
+- Added quota-backed MCP server circuit breakers using `quota_ledger` rows
+  for failure windows and freeze/unfreeze state.
+- Added redacted `mcp.tool_invoked`, `mcp.tool_result`, and
+  `mcp.tool_denied` system events.
+- Added `POST /api/mcp/call`, `ward mcp call`, `POST /api/quota/unfreeze`,
+  and `ward quota unfreeze`.
+
+### Files Changed
+
+- `packages/core/src/mcp/index.ts` - invocation/result/breaker schemas.
+- `packages/memory/src/mcp-client.ts` - stdio `tools/call` helper.
+- `packages/memory/src/mcp-fixture-server.ts` - fixture call result and
+  failure modes.
+- `packages/memory/src/mcp-proxy.ts` - proxy, policy gate, breaker,
+  redaction, events, and unfreeze helper.
+- `packages/memory/src/index.ts` - proxy exports.
+- `apps/runtime/src/index.ts` - MCP call and quota unfreeze API routes.
+- `apps/cli/src/main.ts` - `ward mcp call` and `ward quota unfreeze`.
+- `docs/task/009-mcp-connections.md` and `TASKS.md` - slice tracking.
+
+### Deviations From Plan
+
+- None. This slice remains stdio-only and does not add UI approval,
+  long-lived server pools, HTTP invocation, or WARD-as-MCP-server.
+
+### Verification Run
+
+- `bun run typecheck` - PASS
+- `bun run build` - PASS
+- `git diff --check` - PASS
+- `bun test` - SKIPPED (repo has no test files yet; Bun exits 1)
+- `WARD_HOME=/tmp/ward-task009e-smoke WARD_SECRET_BACKEND=file bun run ward --json init` - PASS
+- Fixture `ward mcp call fixture fixture.read_context ...` allowed smoke - PASS
+- Fixture allowlist denial returns synthetic `tool_not_allowed` - PASS
+- Destructive `repos.delete` under `standard` is denied before dispatch - PASS
+- Forced fixture call failures open the breaker after three failures - PASS
+- Open breaker returns synthetic `server_unavailable` - PASS
+- `ward quota unfreeze mcp_server fixture-fail` clears the open breaker - PASS
+- `ward quota list --limit 12` shows MCP failure/freeze/unfreeze rows - PASS
+- MCP event payload inspection shows redacted token values - PASS
+- Fixture stderr log redaction check - PASS
+- `WARD_HOME=/tmp/ward-task009e-smoke WARD_SECRET_BACKEND=file bun run ward --json down` - PASS
+
+## Quality Gate Notes
+
+### Result
+
+PASS
+
+### Standards Review
+
+- No blocking issues found in the changed files.
+- Invocation, result, unavailable, and breaker contracts stay typed through
+  shared core schemas.
+- The proxy checks policy and breaker state before dispatch, then records
+  redacted events for invoked, result, and denied paths.
+- The new CLI and runtime surfaces are scoped to debug/smoke MCP calls and
+  quota unfreeze; no UI approval, HTTP invocation, or long-lived pool scope
+  leaked into this slice.
+
+### Deviations
+
+- Minor: `callStdioMcpTool` repeats the small JSON-RPC initialize loop used
+  by the probe helper. This is acceptable for the stdio-only MVP and can be
+  extracted if future HTTP/pool work increases the shared transport surface.
+- Minor: manual unfreeze clears the active freeze row but preserves recent
+  failure rows in `quota_ledger` for auditability. A server that immediately
+  fails again inside the rolling window can reopen quickly, which matches the
+  safety intent.
+
+### Required Fixes
+
+- None.

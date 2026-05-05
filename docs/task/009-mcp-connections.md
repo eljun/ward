@@ -244,3 +244,14 @@ per-run allowlist narrowing, and the strict/standard/lenient autonomy matrix.
 It exposes `ward mcp policy` and `POST /api/mcp/policy` so the proxy slice can
 reuse a tested structured `McpPolicyDecision` with synthetic denial payloads.
 Actual `tools/call`, circuit breakers, and approval UI remain deferred.
+
+### MCP Tool Proxy and Circuit Breakers Slice
+
+[009E MCP Tool Proxy and Circuit Breakers](009e-mcp-tool-proxy-circuit-breakers.md)
+adds the first real MCP tool-call path through WARD: `ward mcp call`,
+`POST /api/mcp/call`, stdio `tools/call`, 009D policy enforcement, redacted
+MCP events, and quota-backed per-server circuit breakers. Failure windows and
+freeze/unfreeze state are recorded in `quota_ledger`; open breakers return a
+synthetic `server_unavailable` result until `ward quota unfreeze` or a
+successful half-open probe clears the freeze. HTTP calls, approval UI,
+long-lived pools, and WARD-as-MCP-server remain deferred.

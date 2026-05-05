@@ -13,6 +13,7 @@ import {
   McpPatchServerSchema,
   McpPolicyPreviewRequestSchema,
   McpScopeSchema,
+  McpToolCallRequestSchema,
   OpenGateSchema,
   ProfilePatchSchema,
   QaSupervisorInputSchema,
@@ -132,12 +133,14 @@ import {
   transitionHarnessSession,
   transitionTask,
   unsetSecret,
+  unfreezeMcpServerBreaker,
   updateProfile,
   updateWorkspace,
   warmCacheStats,
   wikiPageHistory,
   writeWikiPage,
-  writePort
+  writePort,
+  callMcpToolThroughProxy
 } from "@ward/memory";
 
 const HOST = "127.0.0.1";
@@ -688,6 +691,16 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
       return json({ ok: true, ledger: listQuotaLedger(Number(url.searchParams.get("limit") ?? "50")) });
     }
 
+    if (parts[0] === "quota" && parts[1] === "unfreeze" && req.method === "POST") {
+      const body = await readJson(req) as Record<string, unknown>;
+      const scope = body.scope ?? "mcp_server";
+      const target = typeof body.target === "string" ? body.target : "";
+      if (scope !== "mcp_server" || !target) {
+        return json({ ok: false, error: "Usage: POST /api/quota/unfreeze { scope: 'mcp_server', target: '<server-id>' }" }, 400);
+      }
+      return json({ ok: true, breaker: unfreezeMcpServerBreaker(target) });
+    }
+
     if (parts[0] === "secrets" && req.method === "GET" && !parts[1]) {
       const scope = url.searchParams.get("scope") ?? undefined;
       const workspace = url.searchParams.get("workspace") ?? undefined;
@@ -737,6 +750,13 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
       return json({
         ok: true,
         decision: await previewMcpPolicy(McpPolicyPreviewRequestSchema.parse(await readJson(req)))
+      });
+    }
+
+    if (parts[0] === "mcp" && parts[1] === "call" && req.method === "POST") {
+      return json({
+        ok: true,
+        call: await callMcpToolThroughProxy(McpToolCallRequestSchema.parse(await readJson(req)))
       });
     }
 

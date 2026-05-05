@@ -1019,7 +1019,21 @@ async function commandQuota(args: string[]): Promise<CliResult> {
     const data = await apiRequest(`/api/quota?limit=${encodeURIComponent(String(limit))}`);
     return { ok: true, command: "quota list", timestamp: nowIso(), message: "WARD quota ledger.", data };
   }
-  throw new Error("Usage: ward quota list [--limit <n>]");
+  if (subcommand === "unfreeze") {
+    const parsed = parseFlags(rest);
+    const [scopeOrTarget, maybeTarget] = parsed.positional;
+    const scope = maybeTarget ? scopeOrTarget : stringFlag(parsed.flags, "scope") ?? "mcp_server";
+    const target = maybeTarget ?? scopeOrTarget ?? stringFlag(parsed.flags, "target");
+    if (!target) {
+      throw new Error("Usage: ward quota unfreeze [mcp_server] <server-id>");
+    }
+    const data = await apiRequest("/api/quota/unfreeze", {
+      method: "POST",
+      body: JSON.stringify({ scope, target })
+    });
+    return { ok: true, command: "quota unfreeze", timestamp: nowIso(), message: "WARD quota target unfrozen.", data };
+  }
+  throw new Error("Usage: ward quota list [--limit <n>] | ward quota unfreeze [mcp_server] <server-id>");
 }
 
 async function commandSecrets(args: string[]): Promise<CliResult> {
@@ -1087,6 +1101,40 @@ async function commandSecrets(args: string[]): Promise<CliResult> {
 
 async function commandMcp(args: string[]): Promise<CliResult> {
   const [subcommand = "list", ...rest] = args;
+  if (subcommand === "call") {
+    const parsed = parseFlags(rest);
+    const [serverId, toolName] = parsed.positional;
+    if (!serverId || !toolName) {
+      throw new Error("Usage: ward mcp call <server-id> <tool-name> [--workspace <slug>] [--json-args <json>] [--allowed <tool-or-pattern>] [--autonomy strict|standard|lenient] [--ci-green]");
+    }
+    const jsonArgs = stringFlag(parsed.flags, "json-args") ?? "{}";
+    let argsValue: unknown;
+    try {
+      argsValue = JSON.parse(jsonArgs);
+    } catch {
+      throw new Error("--json-args must be valid JSON");
+    }
+    const body: Record<string, unknown> = {
+      server_id: serverId,
+      tool_name: toolName,
+      arguments: argsValue,
+      workspace: stringFlag(parsed.flags, "workspace"),
+      autonomy_level: stringFlag(parsed.flags, "autonomy") ?? "standard",
+      capability_profiles: listFlag(parsed.flags, "capability"),
+      ci_green: parsed.flags["ci-green"] === true,
+      timeout_ms: numberFlag(parsed.flags, "timeout-ms")
+    };
+    const allowedTools = listFlag(parsed.flags, "allowed");
+    if (allowedTools.length > 0) {
+      body.allowed_tools = allowedTools;
+    }
+    const data = await apiRequest("/api/mcp/call", {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
+    return { ok: true, command: "mcp call", timestamp: nowIso(), message: "WARD MCP tool call.", data };
+  }
+
   if (subcommand === "policy") {
     const parsed = parseFlags(rest);
     const [toolName] = parsed.positional;
@@ -1226,7 +1274,7 @@ async function commandMcp(args: string[]): Promise<CliResult> {
     return { ok: true, command: "mcp remove", timestamp: nowIso(), message: "WARD MCP server removed.", data };
   }
 
-  throw new Error("Usage: ward mcp list|servers|doctor|policy|add|enable|disable|remove");
+  throw new Error("Usage: ward mcp list|servers|doctor|policy|call|add|enable|disable|remove");
 }
 
 async function commandWorkflow(args: string[]): Promise<CliResult> {

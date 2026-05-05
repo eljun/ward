@@ -9,6 +9,7 @@ type JsonRpcRequest = {
 };
 
 const mode = process.argv.find((arg) => arg.startsWith("--mode="))?.slice("--mode=".length) ?? "ok";
+const failCall = process.argv.find((arg) => arg.startsWith("--fail-call="))?.slice("--fail-call=".length);
 
 const tools = [
   {
@@ -84,6 +85,42 @@ function handle(request: JsonRpcRequest): void {
       process.stderr.write(`fixture token ${process.env.WARD_FIXTURE_TOKEN}\n`);
     }
     result(request.id, { tools });
+    return;
+  }
+  if (request.method === "tools/call") {
+    const params = typeof request.params === "object" && request.params !== null
+      ? request.params as { name?: unknown; arguments?: unknown }
+      : {};
+    const toolName = typeof params.name === "string" ? params.name : "unknown";
+    if (mode === "fail-call" || failCall === toolName) {
+      error(request.id, -32000, `fixture call failure for ${toolName}`);
+      return;
+    }
+    if (toolName === "fixture.read_context" || toolName === "fixture.echo") {
+      process.stderr.write(`fixture called ${toolName}\n`);
+      if (process.env.WARD_FIXTURE_TOKEN) {
+        process.stderr.write(`fixture token ${process.env.WARD_FIXTURE_TOKEN}\n`);
+      }
+      result(request.id, {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              ok: true,
+              tool: toolName,
+              arguments: params.arguments ?? {}
+            })
+          }
+        ],
+        structuredContent: {
+          ok: true,
+          tool: toolName,
+          arguments: params.arguments ?? {}
+        }
+      });
+      return;
+    }
+    error(request.id, -32602, `Unknown fixture tool: ${toolName}`);
     return;
   }
   error(request.id, -32601, `Unknown method: ${request.method ?? "unknown"}`);

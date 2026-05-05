@@ -77,6 +77,56 @@ export const McpPolicyPreviewRequestSchema = z.object({
 });
 export type McpPolicyPreviewRequest = z.input<typeof McpPolicyPreviewRequestSchema>;
 
+export const McpToolCallRequestSchema = z.object({
+  workspace: z.string().optional(),
+  server_id: z.string().min(1),
+  tool_name: z.string().min(1),
+  arguments: z.unknown().optional().default({}),
+  autonomy_level: AutonomyLevelSchema.optional().default("standard"),
+  allowed_tools: z.array(z.string()).optional(),
+  capability_profiles: z.array(McpCapabilityProfileSchema).optional().default([]),
+  ci_green: z.boolean().optional().default(false),
+  timeout_ms: z.number().int().positive().optional().default(5000),
+  trace_id: z.string().optional()
+});
+export type McpToolCallRequest = z.input<typeof McpToolCallRequestSchema>;
+
+export const McpBreakerStatusSchema = z.object({
+  server_id: z.string(),
+  state: z.enum(["closed", "open", "half_open"]),
+  failure_count: z.number().int().nonnegative(),
+  threshold: z.number().int().positive(),
+  frozen_until: z.string().nullable(),
+  retry_after_ms: z.number().int().nonnegative()
+});
+export type McpBreakerStatus = z.infer<typeof McpBreakerStatusSchema>;
+
+export const McpSyntheticUnavailableResultSchema = z.object({
+  type: z.literal("server_unavailable"),
+  server_id: z.string(),
+  reason: z.string(),
+  retry_after_ms: z.number().int().nonnegative()
+});
+export type McpSyntheticUnavailableResult = z.infer<typeof McpSyntheticUnavailableResultSchema>;
+
+export const McpToolCallResultSchema = z.object({
+  ok: z.boolean(),
+  status: z.enum(["ok", "denied", "unavailable", "error"]),
+  server_id: z.string(),
+  tool_name: z.string(),
+  result: z.unknown().nullable(),
+  error: z.string().nullable(),
+  synthetic_result: z.union([
+    McpPolicyDecisionSchema.shape.synthetic_result.unwrap(),
+    McpSyntheticUnavailableResultSchema
+  ]).nullable(),
+  policy: McpPolicyDecisionSchema,
+  breaker: McpBreakerStatusSchema,
+  trace_id: z.string(),
+  duration_ms: z.number().int().nonnegative()
+});
+export type McpToolCallResult = z.infer<typeof McpToolCallResultSchema>;
+
 export const McpServerConfigSchema = z.object({
   command: z.string().min(1).optional(),
   args: z.array(z.string()).optional().default([]),
