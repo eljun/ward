@@ -164,7 +164,15 @@ task. Restoring them is a future task once their use case returns.
   for headings, numerics, the logo. Wide letter-spacing on labels
   (`0.12em`+).
 - Body font: Inter or Geist Sans. Used for paragraphs and form input.
-- Logo is `⚡ WARD` in monospace, all caps.
+- **Logo wordmark renders as `W.A.R.D` (capital letters separated by
+  periods or interpunct dots `·`) — never as the contiguous word
+  `WARD`.** This disambiguates from "hospital ward" visually and in
+  screenshots. Use it everywhere the brand appears in chrome: the
+  top-bar lockup (`⚡ W.A.R.D`), the document title
+  (`W.A.R.D — personal orchestrator`), the splash, and any meta tags.
+  Internal references in code (variables, schemas, paths, env vars,
+  log strings) stay as `WARD` / `ward` — this is purely a visual
+  treatment.
 - Numbers in stat strips use tabular numerals.
 
 ### Dark theme tokens
