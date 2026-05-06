@@ -2,6 +2,10 @@
 
 ## Planned
 
+- [ ] `13` Overview, Workspaces, and Planning UI Refactor
+  - Doc: [docs/task/013-overview-workspaces-planning-ui-refactor.md](docs/task/013-overview-workspaces-planning-ui-refactor.md)
+  - Goal: Replace cluttered three-column layouts with a simple, modern, minimalistic UI for Overview, Workspaces, and Planning views; add button feedback, toasts, and informative empty states; tone down orb backdrop bleed inside content panels.
+
 - [ ] `10` Inbound Remote Messaging
   - Doc: [docs/task/010-inbound-remote-messaging.md](docs/task/010-inbound-remote-messaging.md)
   - Goal: Slack Socket Mode + Telegram long-poll; signature verification; sender/command allowlist; Intervention round-trip; presence-aware routing; audit log.
