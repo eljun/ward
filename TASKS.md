@@ -4,11 +4,7 @@
 
 - [ ] `16` Agentic Orb Conductor
   - Doc: [docs/task/016-agentic-orb-conductor.md](docs/task/016-agentic-orb-conductor.md)
-  - Goal: Make the orb chat understand multi-step requests like "Add a task X for project Y and assign it to Claude Code" — parse intent into a structured plan, confirm with the user, execute through existing endpoints, stream progress back into the transcript, and report a final summary. Builds on 014 and 015.
-
-- [ ] `17` Richer + Configurable Orb Context
-  - Doc: [docs/task/017-configurable-orb-context.md](docs/task/017-configurable-orb-context.md)
-  - Goal: Stop generic orb replies by including specific state (active workspace name, top open tasks, recent sessions, today's date) in the system prompt, AND expose a Settings card where the user can override the system prompt, toggle which categories are injected, and budget the total token cost. Builds on 014 and 015.
+  - Goal: Add an action layer on top of the orb chat. The orb classifies messages as chat vs. conductor, plans multi-step actions in a typed JSON schema (`create_task`, `launch_session`, etc.), confirms inline before executing, runs steps through internal handlers, streams `step_started` / `step_completed` SSE events into the transcript, and watches the launched session's lifecycle in-thread until it reaches a terminal state. Reuses task 015's glass aesthetic for the inline confirmation row. Builds on 014 (orb chat stream), 015 (UI shell, palette, inline patterns), and benefits from 017 (configurable chat prompt) — though 017 is recommended, not strictly required.
 
 - [ ] `10` Inbound Remote Messaging
   - Doc: [docs/task/010-inbound-remote-messaging.md](docs/task/010-inbound-remote-messaging.md)
@@ -24,7 +20,9 @@
 
 ## In Progress
 
-_(none — pick the next planned task)_
+- [ ] `17` Richer + Configurable Orb Context
+  - Doc: [docs/task/017-configurable-orb-context.md](docs/task/017-configurable-orb-context.md)
+  - Goal: Stop generic orb replies by including specific state (active workspace name, top open tasks, recent sessions, today's date) in the system prompt, AND expose a Settings card where the user can override the system prompt, toggle which categories are injected, and budget the total token cost. Builds on 014 and 015.
 
 ## Testing
 
