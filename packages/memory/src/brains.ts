@@ -179,7 +179,7 @@ function defaultBrains(timestamp = nowIso()): BrainConfig[] {
       kind: "openai-compatible",
       runtime: "local",
       auth: "none",
-      model: null,
+      model: "gemma4:e2b",
       base_url: "http://127.0.0.1:11434/v1",
       secret_ref: null,
       env: {},

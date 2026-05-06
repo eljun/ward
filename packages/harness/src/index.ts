@@ -11,6 +11,20 @@ import {
   type WardEvent
 } from "@ward/core";
 
+export {
+  chatCompletion,
+  streamChatCompletion,
+  ollamaChat,
+  streamOllamaChat,
+  probeOpenAiCompatible,
+  OpenAiCompatibleError
+} from "./openai-compatible.js";
+export type {
+  ChatMessage,
+  ChatCompletionRequest,
+  ChatStreamEvent
+} from "./openai-compatible.js";
+
 class AsyncQueue<T> implements AsyncIterable<T> {
   private readonly values: T[] = [];
   private readonly waiters: Array<(result: IteratorResult<T>) => void> = [];
