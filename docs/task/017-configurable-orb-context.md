@@ -1,6 +1,6 @@
 # Task 017: Richer + Configurable Orb Context
 
-- Status: `planned`
+- Status: `testing`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `medium-high`
@@ -310,4 +310,63 @@ No schema changes. No new endpoints (uses existing
 
 ## Implementation Notes
 
-_To be filled in by the implementation stage._
+### What Changed
+
+- `composeOrbSystemPrompt()` is now async and assembles the prompt
+  from a list of blocks (workspace, top tasks, recent sessions,
+  optional wiki snippet, date, profile, closing note) gated by the
+  user's `orb.*` preferences. The persona header is the user's
+  override when present, otherwise the previous default.
+- `clampToBudget()` greedy-fills blocks in priority order and
+  truncates the next block if it overflows the configured token
+  budget. Token estimate uses `Math.ceil(text.length / 4)`.
+- `handleBrainTestReply()` now accepts an optional `system_prompt`
+  string in the request body; when present, the runtime composes the
+  full orb prompt with that string as the header override and uses
+  it as the `system` message for the test call.
+- A new "Orb context" card lives at the bottom of the Settings →
+  Standard tab. Textarea (system override) saves explicitly; toggles
+  and the budget slider persist instantly via
+  `PATCH /api/preferences/global/{key}`. Live token-cost estimate
+  combines the textarea length with a coarse fixed cost per enabled
+  category, mirroring the runtime char/4 heuristic.
+- Reset to default issues a parallel batch of six PATCHes, one per
+  preference key.
+
+### Files Changed
+
+- `apps/runtime/src/index.ts` — replaced `composeOrbSystemPrompt`,
+  added preference reader and block builders, made
+  `buildChatMessages` async, threaded `system_prompt` through the
+  test-reply handler.
+- `apps/ui/src/main.tsx` — added orb-context preference types,
+  defaults, state, fetcher, save/reset/test handlers, sync effect for
+  the textarea draft, and the new Settings card.
+- `apps/ui/src/styles.css` — styling for the orb-context card
+  (textarea, action row with right-aligned token counter, section
+  divider, slider row).
+
+### Deviations From Plan
+
+- The Profile block is appended in addition to the date block; the
+  doc lists profile as part of the state context but says it's
+  "repeated here for the model's situational awareness," so it sits
+  beside the date in the trailing trio (date, profile, closing note).
+- Block separator is a blank line (`\n\n`) instead of a single
+  newline, so the local model sees clearly delimited sections. The
+  budget heuristic still treats each block as a single contiguous
+  cost.
+- The wiki block uses the most-recently-opened workspace (first row
+  from `listWorkspaces()`); WARD has no explicit "active" workspace
+  signal yet.
+- "Reset to default" intentionally PATCHes every key (instead of
+  deleting them) so the resulting state is unambiguous in
+  `GET /api/preferences`.
+
+### Verification Run
+
+- `bun run typecheck` — PASS
+- `bun run build` — PASS (vite build, tsc, depcruise, layer fixture)
+- `git diff --check` — PASS (no whitespace errors)
+- Manual UI smoke — SKIPPED (requires running daemon + Ollama; will
+  be exercised in the test stage).

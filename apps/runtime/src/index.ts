@@ -16,6 +16,7 @@ import {
   McpScopeSchema,
   McpToolCallRequestSchema,
   OpenGateSchema,
+  OrbPlanSchema,
   ProfilePatchSchema,
   QaSupervisorInputSchema,
   RecordAgentSignalSchema,
@@ -33,8 +34,11 @@ import {
   createEvent,
   createTraceId,
   inferAttachmentKind,
+  planRequiresConfirmation,
   type HarnessLaunch,
   type HarnessLifecycleState,
+  type OrbPlan,
+  type OrbStep,
   type RuntimeHealth
 } from "@ward/core";
 import { ClaudeCliHarnessAdapter, CodexCliHarnessAdapter, StubHarnessAdapter, ollamaChat, probeOpenAiCompatible, streamOllamaChat, type ChatMessage, type RunningHarness } from "@ward/harness";
@@ -578,23 +582,188 @@ function matchNavIntent(message: string): { surface: OrbChatSurface; reply: stri
   return null;
 }
 
-function composeOrbSystemPrompt(): string {
-  const profile = getProfile();
-  const workspaces = listWorkspaces();
-  const tasks = listTasks();
-  const sessions = listHarnessSessions({ include_incognito: false });
-  const openTasks = tasks.filter((task) => task.status !== "done" && task.status !== "canceled").length;
-  const blockers = sessions.filter((s) => s.lifecycle_state === "blocked").length;
-  const name = profile.display_name || profile.honorific || "the user";
-  const tone = profile.persona_tone ?? "casual";
-  return [
-    `You are WARD, ${name}'s local peer developer. Tone: ${tone}. Reply in 1-3 short sentences unless asked for more.`,
-    `State: workspaces=${workspaces.length}, open_tasks=${openTasks}, blockers=${blockers}, sessions=${sessions.length}.`,
-    `For real code or file edits, tell the user to launch a Sessions run (claude-code-cli or codex-cli). Don't write code yourself.`
-  ].join("\n");
+type OrbContextOverrides = {
+  systemPrompt: string;
+  includeWorkspaces: boolean;
+  includeTasks: boolean;
+  includeSessions: boolean;
+  includeWiki: boolean;
+  tokenBudget: number;
+};
+
+const ORB_CONTEXT_DEFAULTS: OrbContextOverrides = {
+  systemPrompt: "",
+  includeWorkspaces: true,
+  includeTasks: true,
+  includeSessions: true,
+  includeWiki: false,
+  tokenBudget: 800
+};
+
+function readOrbContextOverrides(): OrbContextOverrides {
+  const prefs = listPreferences();
+  const find = (key: string) =>
+    prefs.find((p) => p.scope === "global" && p.key === key && p.workspace_id === null);
+  const readBool = (key: string, fallback: boolean): boolean => {
+    const row = find(key);
+    if (!row) return fallback;
+    if (typeof row.value_json === "boolean") return row.value_json;
+    if (typeof row.value_json === "number") return row.value_json !== 0;
+    if (typeof row.value_json === "string") return row.value_json === "true" || row.value_json === "1";
+    return fallback;
+  };
+  const readInt = (key: string, fallback: number, min: number, max: number): number => {
+    const row = find(key);
+    if (!row) return fallback;
+    const n = typeof row.value_json === "number" ? row.value_json : Number(row.value_json);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, Math.round(n)));
+  };
+  const readString = (key: string, fallback: string): string => {
+    const row = find(key);
+    if (!row) return fallback;
+    return typeof row.value_json === "string" ? row.value_json : fallback;
+  };
+  return {
+    systemPrompt: readString("orb.system_prompt_override", ORB_CONTEXT_DEFAULTS.systemPrompt),
+    includeWorkspaces: readBool("orb.context.include_workspaces", ORB_CONTEXT_DEFAULTS.includeWorkspaces),
+    includeTasks: readBool("orb.context.include_tasks", ORB_CONTEXT_DEFAULTS.includeTasks),
+    includeSessions: readBool("orb.context.include_sessions", ORB_CONTEXT_DEFAULTS.includeSessions),
+    includeWiki: readBool("orb.context.include_wiki", ORB_CONTEXT_DEFAULTS.includeWiki),
+    tokenBudget: readInt("orb.context.token_budget", ORB_CONTEXT_DEFAULTS.tokenBudget, 200, 4000)
+  };
 }
 
-const DEFAULT_OPENAI_COMPATIBLE_MODEL = "gemma4:e2b";
+function defaultOrbHeader(): string {
+  const profile = getProfile();
+  const name = profile.display_name || profile.honorific || "the user";
+  const tone = profile.persona_tone ?? "casual";
+  return `You are WARD, ${name}'s local peer developer. Tone: ${tone}. Reply in 1-3 short sentences unless asked for more.`;
+}
+
+function buildWorkspaceBlock(): string {
+  const workspaces = listWorkspaces();
+  const active = workspaces[0];
+  if (!active) {
+    return "Active workspace: (none — ask the user to create or open one).";
+  }
+  const repo = active.primary_repo_path ? ` (${active.primary_repo_path})` : "";
+  return `Active workspace: ${active.name}${repo}.`;
+}
+
+function buildTaskBlock(limit: number): string {
+  const open = listTasks().filter((task) => {
+    return task.status !== "done"
+      && task.status !== "canceled"
+      && task.status !== "shipped";
+  });
+  if (open.length === 0) {
+    return "Open tasks: (none).";
+  }
+  const top = open.slice(0, limit).map((task) => `- ${task.id.slice(0, 12)} [${task.priority}] ${task.title}`);
+  return `Open tasks (top ${top.length}):\n${top.join("\n")}`;
+}
+
+function buildSessionBlock(limit: number): string {
+  const sessions = listHarnessSessions({ include_incognito: false }).slice(0, limit);
+  if (sessions.length === 0) {
+    return "Recent sessions: (none).";
+  }
+  const lines = sessions.map((s) => {
+    const summary = (s.summary ?? "").trim().slice(0, 80);
+    return `- ${s.brain_id} · ${s.lifecycle_state}${summary ? ` · ${summary}` : ""}`;
+  });
+  return `Recent sessions (last ${lines.length}):\n${lines.join("\n")}`;
+}
+
+async function buildWikiBlock(): Promise<string | null> {
+  const workspaces = listWorkspaces();
+  const active = workspaces[0];
+  if (!active) return null;
+  const scope = `workspace/${active.slug}`;
+  try {
+    const page = await readWikiPage(scope, "decisions.md");
+    const head = (page.body ?? "").trim().slice(0, 200);
+    if (!head) return null;
+    const history = await wikiPageHistory(scope, "decisions.md").catch(() => []);
+    const latest = history[0];
+    const tag = latest ? ` (latest commit: ${latest.subject} — ${latest.author_name})` : "";
+    return `Latest wiki decisions${tag}:\n${head}`;
+  } catch {
+    return null;
+  }
+}
+
+function buildDateBlock(): string {
+  const now = new Date();
+  const iso = now.toISOString().slice(0, 10);
+  const weekday = now.toLocaleDateString("en-US", { weekday: "short" });
+  return `Today: ${iso} (${weekday}).`;
+}
+
+function buildProfileBlock(): string {
+  const profile = getProfile();
+  const name = profile.display_name || profile.honorific || "the user";
+  const tone = profile.persona_tone ?? "casual";
+  return `Profile: ${name} · tone ${tone}.`;
+}
+
+function buildClosingNote(): string {
+  return "Data is read-only context. For real code edits, tell the user to launch a Sessions run.";
+}
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function clampToBudget(blocks: string[], budget: number): string {
+  if (budget <= 0) return blocks[0] ?? "";
+  const out: string[] = [];
+  let used = 0;
+  for (let i = 0; i < blocks.length; i += 1) {
+    const block = blocks[i];
+    const cost = estimateTokens(block);
+    if (i === 0) {
+      out.push(block);
+      used += cost;
+      continue;
+    }
+    if (used + cost <= budget) {
+      out.push(block);
+      used += cost;
+      continue;
+    }
+    const remaining = Math.max(0, budget - used);
+    if (remaining < 16) break;
+    const charBudget = Math.max(0, remaining * 4 - 8);
+    if (charBudget <= 0) break;
+    const truncated = block.slice(0, charBudget).trimEnd() + "…";
+    out.push(truncated);
+    break;
+  }
+  return out.join("\n\n");
+}
+
+async function composeOrbSystemPrompt(headerOverride?: string): Promise<string> {
+  const overrides = readOrbContextOverrides();
+  const explicit = typeof headerOverride === "string" ? headerOverride.trim() : "";
+  const persisted = overrides.systemPrompt.trim();
+  const header = explicit || persisted || defaultOrbHeader();
+  const blocks: string[] = [header];
+  if (overrides.includeWorkspaces) blocks.push(buildWorkspaceBlock());
+  if (overrides.includeTasks) blocks.push(buildTaskBlock(3));
+  if (overrides.includeSessions) blocks.push(buildSessionBlock(3));
+  if (overrides.includeWiki) {
+    const wiki = await buildWikiBlock();
+    if (wiki) blocks.push(wiki);
+  }
+  blocks.push(buildDateBlock());
+  blocks.push(buildProfileBlock());
+  blocks.push(buildClosingNote());
+  return clampToBudget(blocks, overrides.tokenBudget);
+}
+
+const DEFAULT_OPENAI_COMPATIBLE_MODEL = "gemma4:e4b";
 
 function getLocalChatBrain(): { id: string; base_url: string; model: string } | null {
   const registry = getBrainRegistry();
@@ -606,8 +775,8 @@ function getLocalChatBrain(): { id: string; base_url: string; model: string } | 
 
 type OrbHistoryEntry = { role: "user" | "assistant"; content: string };
 
-function buildChatMessages(history: OrbHistoryEntry[], userMessage: string): ChatMessage[] {
-  const messages: ChatMessage[] = [{ role: "system", content: composeOrbSystemPrompt() }];
+async function buildChatMessages(history: OrbHistoryEntry[], userMessage: string): Promise<ChatMessage[]> {
+  const messages: ChatMessage[] = [{ role: "system", content: await composeOrbSystemPrompt() }];
   for (const turn of history.slice(-8)) {
     if (turn?.role !== "user" && turn?.role !== "assistant") continue;
     if (typeof turn.content !== "string" || turn.content.length === 0) continue;
@@ -617,13 +786,371 @@ function buildChatMessages(history: OrbHistoryEntry[], userMessage: string): Cha
   return messages;
 }
 
+type OrbChatMode = "auto" | "chat" | "conductor";
+
+const ORB_ACTION_VERBS = /\b(add|launch|create|start|make|kick\s*off|set\s*up|run|build|spin\s*up|assign|delete|update)\b/i;
+
+function streamSseHeaders(): HeadersInit {
+  return {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    connection: "keep-alive"
+  };
+}
+
+function composeOrbConductorPrompt(): string {
+  const workspaces = listWorkspaces();
+  const workspaceList = workspaces.length === 0
+    ? "(none — refuse to plan and ask the user to create a workspace first)"
+    : workspaces.map((w) => `- ${w.slug} (${w.name})`).join("\n");
+  const registry = getBrainRegistry();
+  const brainList = registry.brains
+    .filter((b) => b.enabled !== false)
+    .map((b) => `- ${b.id}`)
+    .join("\n") || "- stub-worker";
+  const slugById = new Map<number, string>(workspaces.map((w) => [w.id, w.slug]));
+  const openTasks = listTasks().filter((t) => t.status !== "done" && t.status !== "canceled" && t.status !== "shipped");
+  const taskList = openTasks.length === 0
+    ? "(no open tasks — if the user wants to launch on a task, create one first via create_task in the same plan)"
+    : openTasks.slice(0, 12).map((t) => `- ${t.id} [${slugById.get(t.workspace_id) ?? "?"}] ${t.title}`).join("\n");
+  return `You are W.A.R.D's orb conductor. The user has asked you to perform a multi-step action.
+
+You MUST reply with a single JSON object (no prose, no code fences) matching this schema:
+
+{
+  "intent": "<one short sentence summary>",
+  "needs_confirmation": <true|false>,
+  "steps": [
+    { "kind": "create_task", "args": { "workspace_slug": "<slug>", "title": "<title>", "type": "feature|bug|chore|research", "priority": "low|medium|high|urgent", "description": "<optional>" } },
+    { "kind": "launch_session", "args": { "workspace_slug": "<slug>", "task_ref": "$<step-number>.id", "brain_id": "<brain>", "mode": "headless|visible", "goal": "<concrete goal>" } },
+    { "kind": "read_overview", "args": {} },
+    { "kind": "read_session", "args": { "session_ref": "$<step-number>.session_id" } },
+    { "kind": "read_workspace", "args": { "workspace_slug": "<slug>" } }
+  ]
+}
+
+Rules:
+- ONLY emit JSON. No markdown, no explanation, no surrounding text.
+- Steps execute in order. To reference a previous step's result, use \`$N.field\` where N is the 1-based step index.
+- "task_ref" in launch_session usually points at the previous create_task step: "$1.id".
+- Set "needs_confirmation": true whenever the plan launches a session or modifies state in a way the user might want to double-check.
+- Pick "workspace_slug" from this exact list of existing workspaces — never invent a slug:
+${workspaceList}
+- Pick "brain_id" from this list of available brains — never invent a brain id:
+${brainList}
+- If the user references an existing task (not creating a new one), pick its id from this list — never invent a task id:
+${taskList}
+- Default brain_id is "claude-code-cli" if the user mentions Claude or "codex-cli" if they mention Codex. Otherwise default to "stub-worker".
+- Default mode is "headless".
+- Keep "goal" concrete: a single sentence describing what the brain should do, including the file or module if mentioned.
+- Use 1–4 steps. Do not chain extra reads unless the user asked for them.
+
+Worked example 1
+User: "Add a /health endpoint task to project brief and launch Claude Code on it."
+Output:
+{"intent":"Add /health endpoint task to brief and launch Claude on it","needs_confirmation":true,"steps":[{"kind":"create_task","args":{"workspace_slug":"brief","title":"Add /health endpoint","type":"feature","priority":"high"}},{"kind":"launch_session","args":{"workspace_slug":"brief","task_ref":"$1.id","brain_id":"claude-code-cli","mode":"headless","goal":"Add a /health endpoint to apps/api/src/index.ts and a passing test."}}]}
+
+Worked example 2
+User: "Create a low-priority chore in ward to clean up TODO comments."
+Output:
+{"intent":"Create chore task in ward to clean up TODO comments","needs_confirmation":false,"steps":[{"kind":"create_task","args":{"workspace_slug":"ward","title":"Clean up TODO comments","type":"chore","priority":"low"}}]}
+
+Worked example 3
+User: "What does the brief workspace look like right now?"
+Output:
+{"intent":"Show the brief workspace summary","needs_confirmation":false,"steps":[{"kind":"read_workspace","args":{"workspace_slug":"brief"}}]}
+
+Now produce the plan for the user's most recent message. JSON only.`;
+}
+
+async function classifyOrbIntent(message: string): Promise<OrbChatMode> {
+  if (!ORB_ACTION_VERBS.test(message)) {
+    return "chat";
+  }
+  const brain = getLocalChatBrain();
+  if (!brain) {
+    return "chat";
+  }
+  try {
+    const result = await ollamaChat({
+      baseUrl: brain.base_url,
+      model: brain.model,
+      messages: [
+        { role: "system", content: "Classify the next user message. Reply with ONE word: \"conductor\" if it asks W.A.R.D to take a multi-step action (create, launch, assign, configure), or \"chat\" if it is conversational or a question. Output only one word." },
+        { role: "user", content: message }
+      ],
+      temperature: 0,
+      max_tokens: 4,
+      keep_alive: "60m",
+      think: false,
+      timeoutMs: 8000
+    });
+    const word = result.text.trim().toLowerCase().replace(/[^a-z]/g, "");
+    return word === "conductor" ? "conductor" : "chat";
+  } catch {
+    return "chat";
+  }
+}
+
+function tryExtractJson(text: string): unknown | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+  const body = fenced ? fenced[1] : trimmed;
+  const start = body.indexOf("{");
+  const end = body.lastIndexOf("}");
+  if (start < 0 || end < 0 || end <= start) return null;
+  const candidate = body.slice(start, end + 1);
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    return null;
+  }
+}
+
+async function generateOrbPlan(messages: ChatMessage[]): Promise<{ plan: OrbPlan } | { error: string; raw: string }> {
+  const brain = getLocalChatBrain();
+  if (!brain) {
+    return { error: "No local OpenAI-compatible brain enabled.", raw: "" };
+  }
+  const requestOnce = async (msgs: ChatMessage[]): Promise<string> => {
+    const result = await ollamaChat({
+      baseUrl: brain.base_url,
+      model: brain.model,
+      messages: msgs,
+      temperature: 0.2,
+      max_tokens: 768,
+      keep_alive: "60m",
+      think: false,
+      timeoutMs: 60000,
+      extra: { format: "json" }
+    });
+    return result.text;
+  };
+
+  let raw = "";
+  try {
+    raw = await requestOnce(messages);
+  } catch (err) {
+    return { error: (err as Error).message, raw: "" };
+  }
+  let extracted = tryExtractJson(raw);
+  if (extracted) {
+    const parsed = OrbPlanSchema.safeParse(extracted);
+    if (parsed.success) return { plan: parsed.data };
+  }
+
+  const correction: ChatMessage[] = [
+    ...messages,
+    { role: "assistant", content: raw },
+    { role: "user", content: "That was not valid JSON for the plan schema. Reply again with ONLY a single JSON object that matches the schema. No prose, no code fences." }
+  ];
+  try {
+    raw = await requestOnce(correction);
+  } catch (err) {
+    return { error: (err as Error).message, raw };
+  }
+  extracted = tryExtractJson(raw);
+  if (extracted) {
+    const parsed = OrbPlanSchema.safeParse(extracted);
+    if (parsed.success) return { plan: parsed.data };
+    return { error: parsed.error.issues.map((i) => i.message).join("; "), raw };
+  }
+  return { error: "Model output was not valid JSON.", raw };
+}
+
+function planHumanSummary(plan: OrbPlan): string {
+  const parts: string[] = [];
+  for (const [idx, step] of plan.steps.entries()) {
+    const n = idx + 1;
+    if (step.kind === "create_task") {
+      parts.push(`${n}. Create task "${step.args.title}" in ${step.args.workspace_slug}.`);
+    } else if (step.kind === "launch_session") {
+      parts.push(`${n}. Launch ${step.args.brain_id} (${step.args.mode}) on ${step.args.workspace_slug}.`);
+    } else if (step.kind === "read_overview") {
+      parts.push(`${n}. Read the overview.`);
+    } else if (step.kind === "read_session") {
+      parts.push(`${n}. Read session ${step.args.session_ref}.`);
+    } else if (step.kind === "read_workspace") {
+      parts.push(`${n}. Read workspace ${step.args.workspace_slug}.`);
+    }
+  }
+  return `${plan.intent}\n${parts.join("\n")}`;
+}
+
+function validatePlanReferences(plan: OrbPlan): string | null {
+  const slugs = new Set(listWorkspaces().map((w) => w.slug));
+  const brainIds = new Set(getBrainRegistry().brains.map((b) => b.id));
+  for (const [idx, step] of plan.steps.entries()) {
+    const n = idx + 1;
+    if (step.kind === "create_task" || step.kind === "launch_session" || step.kind === "read_workspace") {
+      const slug = step.args.workspace_slug;
+      if (!slugs.has(slug)) {
+        return `Step ${n} references workspace "${slug}" which does not exist.`;
+      }
+    }
+    if (step.kind === "launch_session") {
+      if (!brainIds.has(step.args.brain_id)) {
+        return `Step ${n} references brain "${step.args.brain_id}" which is not registered.`;
+      }
+    }
+  }
+  return null;
+}
+
+function resolveStepRef(ref: string, results: Array<Record<string, unknown>>): string | null {
+  const m = ref.match(/^\$(\d+)\.([a-z_][a-z0-9_]*)$/i);
+  if (!m) return ref;
+  const idx = Number(m[1]) - 1;
+  const field = m[2];
+  if (!Number.isFinite(idx) || idx < 0 || idx >= results.length) return null;
+  const value = results[idx]?.[field];
+  return typeof value === "string" || typeof value === "number" ? String(value) : null;
+}
+
+async function executeOrbStep(
+  step: OrbStep,
+  index: number,
+  results: Array<Record<string, unknown>>
+): Promise<Record<string, unknown>> {
+  if (step.kind === "create_task") {
+    const task = createTask(CreateTaskSchema.parse({
+      workspace_slug: step.args.workspace_slug,
+      title: step.args.title,
+      description: step.args.description ?? "",
+      type: step.args.type,
+      priority: step.args.priority,
+      source: "user",
+      owner: "user"
+    }));
+    return { id: task.id, title: task.title, workspace_id: task.workspace_id };
+  }
+  if (step.kind === "launch_session") {
+    let taskId: string | undefined;
+    if (step.args.task_ref) {
+      const resolved = resolveStepRef(step.args.task_ref, results);
+      if (!resolved) {
+        throw new Error(`Step ${index + 1}: could not resolve task_ref "${step.args.task_ref}".`);
+      }
+      taskId = resolved;
+    }
+    const detail = await launchHarnessSession({
+      workspace_slug: step.args.workspace_slug,
+      task_id: taskId,
+      brain_id: step.args.brain_id,
+      mode: step.args.mode,
+      goal: step.args.goal
+    });
+    return {
+      session_id: detail.session.id,
+      lifecycle_state: detail.session.lifecycle_state,
+      brain_id: detail.session.brain_id,
+      task_id: detail.session.task_id
+    };
+  }
+  if (step.kind === "read_overview") {
+    const overview = await getOverview({ reason: "orb.conductor" });
+    return {
+      greeting: overview.brief.greeting,
+      open_tasks: overview.brief.counts.open_tasks,
+      active_workspaces: overview.brief.counts.active_workspaces,
+      blockers: overview.brief.counts.blockers
+    };
+  }
+  if (step.kind === "read_session") {
+    const ref = resolveStepRef(step.args.session_ref, results);
+    if (!ref) throw new Error(`Step ${index + 1}: could not resolve session_ref "${step.args.session_ref}".`);
+    const detail = await getHarnessSessionDetail(ref);
+    return {
+      session_id: detail.session.id,
+      lifecycle_state: detail.session.lifecycle_state,
+      brain_id: detail.session.brain_id
+    };
+  }
+  if (step.kind === "read_workspace") {
+    const detail = getWorkspaceDetail(step.args.workspace_slug);
+    return {
+      slug: detail.workspace.slug,
+      name: detail.workspace.name,
+      task_count: detail.tasks.length
+    };
+  }
+  throw new Error(`Unknown step kind.`);
+}
+
+async function handleOrbConductorPlanStream(
+  send: (event: string, data: unknown) => void,
+  message: string,
+  history: OrbHistoryEntry[],
+  traceId: string,
+  ts: string
+): Promise<void> {
+  const messages: ChatMessage[] = [{ role: "system", content: composeOrbConductorPrompt() }];
+  for (const turn of history.slice(-6)) {
+    if (turn?.role !== "user" && turn?.role !== "assistant") continue;
+    if (typeof turn.content !== "string" || turn.content.length === 0) continue;
+    messages.push({ role: turn.role, content: turn.content.slice(0, 2000) });
+  }
+  messages.push({ role: "user", content: message });
+
+  const result = await generateOrbPlan(messages);
+  if ("plan" in result) {
+    const plan = result.plan;
+    const refError = validatePlanReferences(plan);
+    if (refError) {
+      send("delta", { text: `I drafted a plan but ${refError.charAt(0).toLowerCase() + refError.slice(1)} Try again with a real workspace or brain id.` });
+      send("done", { trace_id: traceId, timestamp: ts });
+      return;
+    }
+    const needs = planRequiresConfirmation(plan);
+    const human = planHumanSummary(plan);
+    send("delta", { text: human });
+    send("plan_proposed", {
+      plan: { ...plan, needs_confirmation: needs },
+      human_summary: human
+    });
+    send("done", { trace_id: traceId, timestamp: ts, awaits_confirmation: needs });
+    return;
+  }
+
+  // Plan generation failed twice. Fall back to plain chat for this turn.
+  const chatMessages = await buildChatMessages(history, message);
+  try {
+    const brain = getLocalChatBrain();
+    if (!brain) {
+      send("error", { message: "No local OpenAI-compatible brain enabled." });
+      send("done", { trace_id: traceId, timestamp: ts });
+      return;
+    }
+    for await (const evt of streamOllamaChat({
+      baseUrl: brain.base_url,
+      model: brain.model,
+      messages: chatMessages,
+      temperature: 0.7,
+      max_tokens: 384,
+      keep_alive: "60m",
+      think: false,
+      timeoutMs: 120000
+    })) {
+      if (evt.type === "delta") send("delta", { text: evt.text });
+      else if (evt.type === "error") send("error", { message: evt.message });
+    }
+  } catch (err) {
+    send("error", { message: (err as Error).message });
+  }
+  send("done", { trace_id: traceId, timestamp: ts, planner_fallback: true });
+}
+
 async function handleOrbChatStream(req: Request): Promise<Response> {
-  const body = await readJson(req) as { message?: unknown; history?: unknown };
+  const body = await readJson(req) as { message?: unknown; history?: unknown; mode?: unknown };
   const message = typeof body.message === "string" ? body.message.trim() : "";
   if (!message) {
     return json({ ok: false, error: "Message is required." }, 400);
   }
   const history = Array.isArray(body.history) ? (body.history as OrbHistoryEntry[]) : [];
+  const requestedMode: OrbChatMode = body.mode === "chat" || body.mode === "conductor" || body.mode === "auto"
+    ? body.mode
+    : "auto";
   const traceId = createTraceId("orb");
   const ts = new Date().toISOString();
 
@@ -638,13 +1165,7 @@ async function handleOrbChatStream(req: Request): Promise<Response> {
         controller.close();
       }
     });
-    return new Response(stream, {
-      headers: {
-        "content-type": "text/event-stream",
-        "cache-control": "no-cache",
-        connection: "keep-alive"
-      }
-    });
+    return new Response(stream, { headers: streamSseHeaders() });
   }
 
   const brain = getLocalChatBrain();
@@ -655,7 +1176,30 @@ async function handleOrbChatStream(req: Request): Promise<Response> {
     }, 503);
   }
 
-  const messages = buildChatMessages(history, message);
+  let mode: OrbChatMode = requestedMode;
+  if (mode === "auto") {
+    mode = await classifyOrbIntent(message);
+  }
+
+  if (mode === "conductor") {
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const encoder = new TextEncoder();
+        const send = (event: string, data: unknown) =>
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        try {
+          await handleOrbConductorPlanStream(send, message, history, traceId, ts);
+        } catch (err) {
+          send("error", { message: (err as Error).message });
+          send("done", { trace_id: traceId, timestamp: ts });
+        }
+        controller.close();
+      }
+    });
+    return new Response(stream, { headers: streamSseHeaders() });
+  }
+
+  const messages = await buildChatMessages(history, message);
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -684,16 +1228,85 @@ async function handleOrbChatStream(req: Request): Promise<Response> {
     }
   });
 
-  return new Response(stream, {
-    headers: {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache",
-      connection: "keep-alive"
-    }
-  });
+  return new Response(stream, { headers: streamSseHeaders() });
 }
 
-async function handleBrainTestReply(brainId: string, body: { message?: unknown }): Promise<Response> {
+async function handleOrbConductorExecute(req: Request): Promise<Response> {
+  const body = await readJson(req) as { plan?: unknown };
+  const parsed = OrbPlanSchema.safeParse(body.plan);
+  if (!parsed.success) {
+    return json({ ok: false, error: `Invalid plan: ${parsed.error.issues.map((i) => i.message).join("; ")}` }, 400);
+  }
+  const plan = parsed.data;
+  const refError = validatePlanReferences(plan);
+  if (refError) {
+    return json({ ok: false, error: refError }, 400);
+  }
+  const traceId = createTraceId("orb-conductor");
+  const ts = new Date().toISOString();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const encoder = new TextEncoder();
+      const send = (event: string, data: unknown) =>
+        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      const results: Array<Record<string, unknown>> = [];
+      const summaries: string[] = [];
+      try {
+        for (const [idx, step] of plan.steps.entries()) {
+          let human: string;
+          if (step.kind === "create_task") {
+            human = `Creating task "${step.args.title}" in ${step.args.workspace_slug}…`;
+          } else if (step.kind === "launch_session") {
+            human = `Launching ${step.args.brain_id} session in ${step.args.workspace_slug}…`;
+          } else if (step.kind === "read_overview") {
+            human = `Reading overview…`;
+          } else if (step.kind === "read_session") {
+            human = `Reading session ${step.args.session_ref}…`;
+          } else {
+            human = `Reading workspace ${step.args.workspace_slug}…`;
+          }
+          send("step_started", { step_index: idx, kind: step.kind, human });
+          try {
+            const result = await executeOrbStep(step, idx, results);
+            results.push(result);
+            send("step_completed", { step_index: idx, kind: step.kind, result });
+            if (step.kind === "create_task" && typeof result.id === "string") {
+              summaries.push(`task ${String(result.id).slice(0, 16)}`);
+            } else if (step.kind === "launch_session" && typeof result.session_id === "string") {
+              summaries.push(`session ${String(result.session_id).slice(0, 16)}`);
+            }
+          } catch (err) {
+            const message = (err as Error).message;
+            send("error", { step_index: idx, kind: step.kind, message });
+            send("done", { trace_id: traceId, timestamp: ts });
+            controller.close();
+            return;
+          }
+        }
+        send("chain_completed", {
+          trace_id: traceId,
+          summary: summaries.length > 0
+            ? `Done: ${summaries.join(", ")}.`
+            : `Done: ${plan.steps.length} step${plan.steps.length === 1 ? "" : "s"}.`,
+          results
+        });
+        send("done", { trace_id: traceId, timestamp: ts });
+      } catch (err) {
+        send("error", { message: (err as Error).message });
+        send("done", { trace_id: traceId, timestamp: ts });
+      }
+      controller.close();
+    }
+  });
+
+  return new Response(stream, { headers: streamSseHeaders() });
+}
+
+async function handleBrainTestReply(
+  brainId: string,
+  body: { message?: unknown; system_prompt?: unknown }
+): Promise<Response> {
   const registry = getBrainRegistry();
   const brain = registry.brains.find((b) => b.id === brainId);
   if (!brain) return json({ ok: false, error: `Unknown brain: ${brainId}` }, 404);
@@ -704,12 +1317,20 @@ async function handleBrainTestReply(brainId: string, body: { message?: unknown }
   const message = typeof body.message === "string" && body.message.trim().length > 0
     ? body.message.trim()
     : "Reply with one short greeting and your model name.";
+  const messages: ChatMessage[] = [];
+  if (typeof body.system_prompt === "string") {
+    const composed = await composeOrbSystemPrompt(body.system_prompt);
+    if (composed.trim().length > 0) {
+      messages.push({ role: "system", content: composed });
+    }
+  }
+  messages.push({ role: "user", content: message });
   const startedAt = Date.now();
   try {
     const result = await ollamaChat({
       baseUrl: brain.base_url,
       model,
-      messages: [{ role: "user", content: message }],
+      messages,
       temperature: 0.7,
       max_tokens: 128,
       keep_alive: "60m",
@@ -819,6 +1440,10 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
       return handleOrbChatStream(req);
     }
 
+    if (parts[0] === "orb" && parts[1] === "conductor" && parts[2] === "execute" && req.method === "POST") {
+      return handleOrbConductorExecute(req);
+    }
+
     if (parts[0] === "orb" && parts[1] === "chat" && req.method === "POST") {
       const body = await readJson(req) as { message?: unknown };
       const message = typeof body.message === "string" ? body.message.trim() : "";
@@ -859,7 +1484,7 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
     }
 
     if (parts[0] === "brains" && parts[1] && parts[2] === "test-reply" && req.method === "POST") {
-      const body = await readJson(req) as { message?: unknown };
+      const body = await readJson(req) as { message?: unknown; system_prompt?: unknown };
       return handleBrainTestReply(parts[1], body);
     }
 

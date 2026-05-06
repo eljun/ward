@@ -9,3 +9,4 @@ export * from "./plan/index.ts";
 export * from "./harness/index.ts";
 export * from "./brains/index.ts";
 export * from "./mcp/index.ts";
+export * from "./orb/index.ts";

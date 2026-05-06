@@ -1,6 +1,6 @@
 # Task 016: Agentic Orb Conductor
 
-- Status: `planned`
+- Status: `testing`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `medium-high`
@@ -364,4 +364,132 @@ No DB schema changes. No new packages.
 
 ## Implementation Notes
 
-_To be filled in by the implementation stage._
+### What Changed
+
+- `packages/core/src/orb/index.ts` defines the typed `OrbPlan` schema:
+  a discriminated union of `OrbStep` kinds (`create_task`,
+  `launch_session`, `read_overview`, `read_session`,
+  `read_workspace`) with strict per-kind args and
+  `$N.field` step references constrained by regex. `OrbPlanSchema` and
+  `planRequiresConfirmation()` are re-exported from `@ward/core` so the
+  runtime, future tests, and any client share one source of truth.
+- The runtime's `POST /api/orb/chat/stream` now accepts an optional
+  `mode: "auto" | "chat" | "conductor"` body field. The default is
+  `auto`: if the user's message contains an action verb, a one-token
+  `classifyOrbIntent()` Ollama call decides between `chat` and
+  `conductor`. `chat` mode keeps the existing streaming reply path.
+- `composeOrbConductorPrompt()` is built fresh per request from the
+  live workspace, brain, and open-task lists (no hallucinated slugs,
+  brain ids, or task ids), embeds three worked few-shot examples,
+  and forces JSON-only output. The conductor path uses non-streaming
+  `ollamaChat` with `extra: { format: "json" }`, low temperature,
+  and a single corrective retry. On the second failure it falls
+  back to plain chat for that turn (`planner_fallback: true` in the
+  `done` frame).
+- A successful plan is validated server-side against existing
+  workspace slugs and brain ids; any reference miss surfaces as a
+  friendly `delta` text without state changes. Valid plans force
+  `needs_confirmation: true` whenever a `launch_session` step is
+  present and emit a `plan_proposed` SSE frame carrying the canonical
+  plan and a human-readable summary.
+- `POST /api/orb/conductor/execute` re-validates the plan, then
+  executes steps in order through internal calls (no HTTP loop):
+  `createTask` for tasks, the existing `launchHarnessSession`
+  (`prepareHarnessLaunch` + `drainHarnessQueue`) for sessions,
+  `getOverview`, `getHarnessSessionDetail`, `getWorkspaceDetail` for
+  reads. `$N.field` references are resolved against prior step
+  results before the step runs. The handler emits `step_started` /
+  `step_completed` / `error` / `chain_completed` / `done` SSE frames.
+  A failure stops the chain cleanly; prior steps are not rolled back
+  per the spec.
+- The UI orb consumer recognizes the new `plan_proposed` frame, the
+  `step_*` frames, and `chain_completed`. A single ward turn carries
+  the proposal, accumulating step events, session watchers, and the
+  final summary so the conversation stays cohesive (no extra
+  bubbles). After a `launch_session` step completes, the UI attaches
+  an `EventSource` to `/api/sessions/:id/events`, listens for
+  `session.state_transitioned`, and renders compact lifecycle markers
+  in-thread until the state reaches `done`/`failed`/`blocked`/
+  `canceled`.
+- The inline confirmation row uses task 015's glass tokens — Run /
+  Cancel pills above the transcript bubble, plus a `⌘↵ run · esc
+  cancel` hint. Cmd/Ctrl+Enter confirms the most recent awaiting
+  plan and Esc cancels it; the existing palette/launch shortcuts
+  still work because the awaiting-plan check runs first.
+
+### Files Changed
+
+- `packages/core/src/orb/index.ts` (new) — Zod schemas + helpers.
+- `packages/core/src/index.ts` — re-export the orb module.
+- `apps/runtime/src/index.ts` — added `composeOrbConductorPrompt`,
+  `classifyOrbIntent`, `generateOrbPlan`, `validatePlanReferences`,
+  `resolveStepRef`, `executeOrbStep`,
+  `handleOrbConductorPlanStream`, `handleOrbConductorExecute`;
+  switched `handleOrbChatStream` on `mode`; routed
+  `POST /api/orb/conductor/execute`.
+- `apps/ui/src/main.tsx` — extended `OrbChatTurn` with plan/step/
+  watch fields; handle `plan_proposed` in the existing reader; added
+  `runOrbConductorPlan`, `cancelOrbConductorPlan`, and
+  `watchOrbSession` (session SSE attached after `launch_session`);
+  rendered the inline confirmation row, step list, and watch
+  markers; bound Cmd+Enter / Esc.
+- `apps/ui/src/styles.css` — `.orb-plan*` styles for the plan
+  surface (steps, watches, summary, confirmation pill row, hint).
+- `TASKS.md` — moved task 16 to In Progress (later promoted to
+  Testing by the workflow linter as task 17 closed out).
+
+### Deviations From Plan
+
+- The action vocabulary in v1 is exactly the five kinds the spec
+  lists (`create_task`, `launch_session`, `read_overview`,
+  `read_session`, `read_workspace`), no extras.
+- The conductor system prompt is composed per request from
+  `listWorkspaces()` and `getBrainRegistry()` rather than relying on
+  the chat-mode context blocks. This keeps the conductor prompt
+  decoupled from task 017's user-configurable chat prompt, as the
+  spec requires.
+- The session progress watcher reads `session.state_changed` events
+  (the actual runtime event type, not the spec's
+  `session.state_transitioned`) and reads the `to_state` field from
+  the payload. It renders state arrows ("initializing →
+  implementing") and detaches on any terminal state, on
+  `EventSource` error, or implicitly when the page unmounts. There
+  is no UI dismiss control in v1 — the watcher ends itself when the
+  session ends, matching the spec's "watcher detaches when
+  terminal" requirement.
+- The orb's auto-TTS-on-reply behavior is suppressed when the
+  stream emitted a `plan_proposed` frame, so the human summary
+  doesn't blurt aloud before the user has decided whether to run
+  the plan.
+- `runOrbConductorPlan` triggers `refresh()` and the active
+  workspace's session/detail refresh after the chain completes so
+  newly created tasks and sessions show up in their drawers without
+  the user leaving the home view.
+
+### Post-implementation: model bump to gemma4:e4b
+
+A pair of probe scripts under `scripts/probe-orb-classifier.ts` and
+`scripts/probe-orb-planner.ts` were added to drive the actual local
+brain through the same prompts the runtime uses. On the original
+default (`gemma4:e2b`, 5.1B) the classifier returned an empty string
+on **0 of 5 actionable prompts** while correctly answering "chat" on
+conversational ones, meaning every actionable prompt silently fell
+through to chat. On `gemma4:e4b` (8B) the classifier scored
+**9 of 9** actionable as "conductor" and **4 of 4** chat as "chat",
+with ~270 ms warm latency. Plan generation was 5/5 valid on both
+models. The default `DEFAULT_OPENAI_COMPATIBLE_MODEL` was therefore
+bumped from `gemma4:e2b` to `gemma4:e4b` in
+`apps/runtime/src/index.ts`, the seeded `local-openai-compatible`
+brain in `packages/memory/src/brains.ts`, and the Settings copy in
+`apps/ui/src/main.tsx`. Existing instances with empty `model` in
+the brain registry pick up the new default on the next daemon
+restart; instances with an explicit model keep their override.
+
+### Verification Run
+
+- `bun run typecheck` — PASS
+- `bun run build` — PASS (vite build, tsc, dependency-cruise,
+  layer-fixture lint)
+- `git diff --check` — PASS (no whitespace errors)
+- Manual UI smoke — SKIPPED (requires running daemon + Ollama; will
+  be exercised in the test stage).

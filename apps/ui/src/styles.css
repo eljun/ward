@@ -342,6 +342,120 @@ label {
   line-height: 1.4;
 }
 
+.orb-plan {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.orb-plan-steps,
+.orb-plan-watches {
+  list-style: none;
+  margin: 0;
+  padding: 6px 8px;
+  display: grid;
+  gap: 4px;
+  border-radius: 12px;
+  background: rgba(15, 22, 32, 0.18);
+  border: 1px solid rgba(120, 140, 160, 0.22);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  color: var(--ink);
+}
+
+.orb-plan-steps li,
+.orb-plan-watches li {
+  display: grid;
+  grid-template-columns: 14px auto 1fr;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.orb-plan-steps .dot {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.orb-plan-steps .kind {
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.orb-plan-steps .human {
+  color: var(--ink);
+}
+
+.orb-plan-watches li {
+  grid-template-columns: minmax(80px, auto) 1fr auto;
+}
+
+.orb-plan-watches .watch-id {
+  color: var(--muted);
+}
+
+.orb-plan-watches .watch-trace {
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+.orb-plan-watches .watch-summary {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.orb-plan-summary {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.orb-plan-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 14px;
+  background: rgba(20, 101, 255, 0.08);
+  border: 1px solid rgba(20, 101, 255, 0.22);
+  backdrop-filter: blur(18px);
+}
+
+.orb-plan-confirm button {
+  appearance: none;
+  border: 1px solid rgba(120, 140, 160, 0.28);
+  background: rgba(250, 252, 255, 0.86);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, transform 120ms ease;
+}
+
+.orb-plan-confirm button:hover {
+  background: rgba(255, 255, 255, 0.96);
+  transform: translateY(-1px);
+}
+
+.orb-plan-confirm .orb-plan-run {
+  background: rgba(20, 101, 255, 0.18);
+  border-color: rgba(20, 101, 255, 0.32);
+}
+
+.orb-plan-confirm .orb-plan-cancel {
+  background: rgba(180, 60, 70, 0.12);
+  border-color: rgba(180, 60, 70, 0.32);
+}
+
+.orb-plan-hint {
+  color: var(--muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-left: auto;
+}
+
 .surface-drawer {
   position: fixed;
   top: 86px;
@@ -2467,16 +2581,15 @@ body.theme-dark .ward-logo {
   align-items: center;
   gap: 8px;
   margin: 0;
-  padding: 6px 12px;
-  border-radius: 999px;
+  padding: 6px 0;
   font-family: "JetBrains Mono", ui-monospace, monospace;
   font-size: 0.78rem;
   font-weight: 800;
   letter-spacing: 0.18em;
   color: var(--ink);
   text-transform: uppercase;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: none;
 }
 
 body.theme-dark .ward-logo .bolt {
@@ -3099,4 +3212,74 @@ body.theme-dark .orb-transcript p {
   color: var(--muted);
   font-size: 0.74rem;
   letter-spacing: 0.04em;
+}
+
+.orb-context-card .orb-context-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.orb-context-textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  resize: vertical;
+  min-height: 6.5rem;
+}
+
+.orb-context-textarea:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.orb-context-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.orb-context-tokens {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.orb-context-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.orb-context-section strong {
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.orb-context-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.orb-context-slider-row input[type="range"] {
+  flex: 1;
+  accent-color: rgba(180, 200, 255, 0.7);
 }

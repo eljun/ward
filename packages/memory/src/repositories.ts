@@ -838,15 +838,27 @@ export function listPreferences(): Preference[] {
 export function setPreference(scope: "global" | "workspace" | "repo", key: string, value: unknown, workspaceId?: number): Preference {
   return withDb((db) => {
     const timestamp = nowIso();
-    db.query(`
-      INSERT INTO preference (scope, workspace_id, key, value_json, source, confidence, updated_at)
-      VALUES (?, ?, ?, ?, 'user', 1, ?)
-      ON CONFLICT(scope, workspace_id, key) DO UPDATE SET
-        value_json = excluded.value_json,
-        source = 'user',
-        confidence = 1,
-        updated_at = excluded.updated_at
-    `).run(scope, workspaceId ?? null, key, JSON.stringify(value), timestamp);
+    const wsId = workspaceId ?? null;
+    const json = JSON.stringify(value);
+    // SQLite's UNIQUE(scope, workspace_id, key) treats NULL as distinct, so a
+    // bare ON CONFLICT clause never fires when workspace_id IS NULL. Do an
+    // explicit UPDATE-or-INSERT, and collapse any pre-existing duplicates
+    // (left over from the buggy ON CONFLICT path) into a single row.
+    const existing = db.query<{ id: number }, [string, number | null, string]>(
+      "SELECT id FROM preference WHERE scope = ? AND workspace_id IS ? AND key = ? ORDER BY id ASC"
+    ).all(scope, wsId, key);
+    if (existing.length > 0) {
+      const keepId = existing[0].id;
+      db.query("UPDATE preference SET value_json = ?, source = 'user', confidence = 1, updated_at = ? WHERE id = ?")
+        .run(json, timestamp, keepId);
+      for (const dup of existing.slice(1)) {
+        db.query("DELETE FROM preference WHERE id = ?").run(dup.id);
+      }
+    } else {
+      db.query(
+        "INSERT INTO preference (scope, workspace_id, key, value_json, source, confidence, updated_at) VALUES (?, ?, ?, ?, 'user', 1, ?)"
+      ).run(scope, wsId, key, json, timestamp);
+    }
     const row = db.query<{
       id: number;
       scope: "global" | "workspace" | "repo";
@@ -857,7 +869,7 @@ export function setPreference(scope: "global" | "workspace" | "repo", key: strin
       confidence: number;
       updated_at: string;
     }, [string, number | null, string]>("SELECT * FROM preference WHERE scope = ? AND workspace_id IS ? AND key = ?")
-      .get(scope, workspaceId ?? null, key)!;
+      .get(scope, wsId, key)!;
     return { ...row, value_json: JSON.parse(row.value_json) };
   });
 }

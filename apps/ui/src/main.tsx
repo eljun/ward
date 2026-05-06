@@ -481,12 +481,116 @@ type OrbChatResponse = {
   timestamp: string;
 };
 
+type OrbPlanStep = {
+  kind: string;
+  args: Record<string, unknown>;
+};
+
+type OrbPlanProposal = {
+  intent: string;
+  needs_confirmation: boolean;
+  steps: OrbPlanStep[];
+};
+
+type OrbStepEvent = {
+  step_index: number;
+  kind: string;
+  human?: string;
+  result?: Record<string, unknown>;
+  error?: string;
+};
+
+type OrbSessionWatch = {
+  session_id: string;
+  states: string[];
+  terminal: boolean;
+  summary?: string;
+};
+
+type OrbPlanStatus = "awaiting" | "running" | "completed" | "canceled" | "failed";
+
 type OrbChatTurn = {
   id: string;
   role: "user" | "ward";
   text: string;
   timestamp: string;
+  plan?: OrbPlanProposal;
+  planStatus?: OrbPlanStatus;
+  steps?: OrbStepEvent[];
+  watches?: OrbSessionWatch[];
+  chainSummary?: string;
 };
+
+type PreferenceRow = {
+  scope: "global" | "workspace" | "repo";
+  workspace_id: number | null;
+  key: string;
+  value_json: unknown;
+};
+
+type OrbContextSettings = {
+  systemPrompt: string;
+  includeWorkspaces: boolean;
+  includeTasks: boolean;
+  includeSessions: boolean;
+  includeWiki: boolean;
+  tokenBudget: number;
+};
+
+const ORB_CONTEXT_DEFAULTS: OrbContextSettings = {
+  systemPrompt: "",
+  includeWorkspaces: true,
+  includeTasks: true,
+  includeSessions: true,
+  includeWiki: false,
+  tokenBudget: 800
+};
+
+const ORB_CONTEXT_KEYS = {
+  systemPrompt: "orb.system_prompt_override",
+  includeWorkspaces: "orb.context.include_workspaces",
+  includeTasks: "orb.context.include_tasks",
+  includeSessions: "orb.context.include_sessions",
+  includeWiki: "orb.context.include_wiki",
+  tokenBudget: "orb.context.token_budget"
+} as const;
+
+function orbContextFromPreferences(prefs: PreferenceRow[]): OrbContextSettings {
+  const find = (key: string) =>
+    prefs.find((row) => row.scope === "global" && row.workspace_id === null && row.key === key);
+  const readBool = (key: string, fallback: boolean): boolean => {
+    const row = find(key);
+    if (!row) return fallback;
+    if (typeof row.value_json === "boolean") return row.value_json;
+    if (typeof row.value_json === "number") return row.value_json !== 0;
+    if (typeof row.value_json === "string") return row.value_json === "true" || row.value_json === "1";
+    return fallback;
+  };
+  const readInt = (key: string, fallback: number, min: number, max: number): number => {
+    const row = find(key);
+    if (!row) return fallback;
+    const n = typeof row.value_json === "number" ? row.value_json : Number(row.value_json);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, Math.round(n)));
+  };
+  const readString = (key: string, fallback: string): string => {
+    const row = find(key);
+    if (!row) return fallback;
+    return typeof row.value_json === "string" ? row.value_json : fallback;
+  };
+  return {
+    systemPrompt: readString(ORB_CONTEXT_KEYS.systemPrompt, ORB_CONTEXT_DEFAULTS.systemPrompt),
+    includeWorkspaces: readBool(ORB_CONTEXT_KEYS.includeWorkspaces, ORB_CONTEXT_DEFAULTS.includeWorkspaces),
+    includeTasks: readBool(ORB_CONTEXT_KEYS.includeTasks, ORB_CONTEXT_DEFAULTS.includeTasks),
+    includeSessions: readBool(ORB_CONTEXT_KEYS.includeSessions, ORB_CONTEXT_DEFAULTS.includeSessions),
+    includeWiki: readBool(ORB_CONTEXT_KEYS.includeWiki, ORB_CONTEXT_DEFAULTS.includeWiki),
+    tokenBudget: readInt(ORB_CONTEXT_KEYS.tokenBudget, ORB_CONTEXT_DEFAULTS.tokenBudget, 200, 4000)
+  };
+}
+
+function estimateOrbTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -939,6 +1043,11 @@ function App() {
   } | null>(null);
   const [localBrainTest, setLocalBrainTest] = useState<{ reply?: string; error?: string; latency_ms?: number } | null>(null);
   const [localBrainBusy, setLocalBrainBusy] = useState("");
+  const [orbContext, setOrbContext] = useState<OrbContextSettings>(ORB_CONTEXT_DEFAULTS);
+  const [orbSystemDraft, setOrbSystemDraft] = useState<string>("");
+  const [orbContextBusy, setOrbContextBusy] = useState<"" | "save-prompt" | "reset" | "test">("");
+  const [orbContextMessage, setOrbContextMessage] = useState<string>("");
+  const [orbContextTest, setOrbContextTest] = useState<{ reply?: string; error?: string; latency_ms?: number } | null>(null);
   const [quotaLedger, setQuotaLedger] = useState<QuotaLedgerEntry[]>([]);
   const [brainBusy, setBrainBusy] = useState("");
   const [mcpEffective, setMcpEffective] = useState<EffectiveMcpConfig | null>(null);
@@ -1185,9 +1294,20 @@ function App() {
     setTasks(taskResponse.tasks);
     setOverview(overviewResponse.overview);
     await refreshBrainSurface();
+    await refreshOrbContext();
     await refreshConnections(selectedSlug || workspaceResponse.workspaces[0]?.slug || "");
     if (!selectedSlug && workspaceResponse.workspaces[0]) {
       setSelectedSlug(workspaceResponse.workspaces[0].slug);
+    }
+  }
+
+  async function refreshOrbContext() {
+    try {
+      const response = await api<{ preferences: PreferenceRow[] }>("/api/preferences");
+      setOrbContext(orbContextFromPreferences(response.preferences));
+    } catch (err) {
+      // Non-fatal: orb context just falls back to defaults
+      console.warn("Failed to load orb context preferences", err);
     }
   }
 
@@ -1287,6 +1407,10 @@ function App() {
   useEffect(() => {
     refresh().catch((err) => setError(err.message));
   }, []);
+
+  useEffect(() => {
+    setOrbSystemDraft(orbContext.systemPrompt);
+  }, [orbContext.systemPrompt]);
 
   useEffect(() => {
     if (!("speechSynthesis" in window)) {
@@ -1414,6 +1538,12 @@ function App() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const meta = event.metaKey || event.ctrlKey;
+      const awaitingTurn = [...orbTurns].reverse().find((t) => t.role === "ward" && t.plan && t.planStatus === "awaiting");
+      if (meta && event.key === "Enter" && awaitingTurn) {
+        event.preventDefault();
+        runOrbConductorPlan(awaitingTurn.id).catch((err) => setError(err.message));
+        return;
+      }
       if (meta && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setPaletteOpen((open) => !open);
@@ -1433,6 +1563,10 @@ function App() {
         return;
       }
       if (event.key === "Escape") {
+        if (awaitingTurn) {
+          cancelOrbConductorPlan(awaitingTurn.id);
+          return;
+        }
         if (paletteOpen) {
           setPaletteOpen(false);
           return;
@@ -1448,7 +1582,7 @@ function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [paletteOpen, settingsOpen, workspaceMenuOpen, selectedWorkspace, enabledBrains.length]);
+  }, [paletteOpen, settingsOpen, workspaceMenuOpen, selectedWorkspace, enabledBrains.length, orbTurns]);
 
   // Visibility-aware refresh: when the tab becomes visible again, refresh the active surface.
   useEffect(() => {
@@ -1562,6 +1696,85 @@ function App() {
       setLocalBrainTest({ error: (err as Error).message });
     } finally {
       setLocalBrainBusy("");
+    }
+  }
+
+  async function patchOrbPreference(key: string, value: unknown): Promise<void> {
+    await api(`/api/preferences/global/${encodeURIComponent(key)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ value })
+    });
+  }
+
+  async function updateOrbContextField<K extends keyof OrbContextSettings>(
+    field: K,
+    value: OrbContextSettings[K]
+  ): Promise<void> {
+    const previous = orbContext;
+    setOrbContext({ ...previous, [field]: value });
+    try {
+      await patchOrbPreference(ORB_CONTEXT_KEYS[field], value);
+    } catch (err) {
+      setOrbContext(previous);
+      setError((err as Error).message);
+    }
+  }
+
+  async function saveOrbSystemPrompt(): Promise<void> {
+    setOrbContextBusy("save-prompt");
+    setOrbContextMessage("");
+    try {
+      await patchOrbPreference(ORB_CONTEXT_KEYS.systemPrompt, orbSystemDraft);
+      setOrbContext((prev) => ({ ...prev, systemPrompt: orbSystemDraft }));
+      setOrbContextMessage("System instruction saved.");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setOrbContextBusy("");
+    }
+  }
+
+  async function resetOrbContext(): Promise<void> {
+    setOrbContextBusy("reset");
+    setOrbContextMessage("");
+    try {
+      await Promise.all([
+        patchOrbPreference(ORB_CONTEXT_KEYS.systemPrompt, ORB_CONTEXT_DEFAULTS.systemPrompt),
+        patchOrbPreference(ORB_CONTEXT_KEYS.includeWorkspaces, ORB_CONTEXT_DEFAULTS.includeWorkspaces),
+        patchOrbPreference(ORB_CONTEXT_KEYS.includeTasks, ORB_CONTEXT_DEFAULTS.includeTasks),
+        patchOrbPreference(ORB_CONTEXT_KEYS.includeSessions, ORB_CONTEXT_DEFAULTS.includeSessions),
+        patchOrbPreference(ORB_CONTEXT_KEYS.includeWiki, ORB_CONTEXT_DEFAULTS.includeWiki),
+        patchOrbPreference(ORB_CONTEXT_KEYS.tokenBudget, ORB_CONTEXT_DEFAULTS.tokenBudget)
+      ]);
+      setOrbContext(ORB_CONTEXT_DEFAULTS);
+      setOrbSystemDraft(ORB_CONTEXT_DEFAULTS.systemPrompt);
+      setOrbContextMessage("Reset to defaults.");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setOrbContextBusy("");
+    }
+  }
+
+  async function runOrbContextTest(): Promise<void> {
+    setOrbContextBusy("test");
+    setOrbContextTest(null);
+    try {
+      const response = await api<{ reply?: string; latency_ms?: number }>(
+        `/api/brains/local-openai-compatible/test-reply`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            message: "Reply with one short greeting.",
+            system_prompt: orbSystemDraft
+          })
+        }
+      );
+      setOrbContextTest({ reply: response.reply, latency_ms: response.latency_ms });
+    } catch (err) {
+      setOrbContextTest({ error: (err as Error).message });
+    } finally {
+      setOrbContextBusy("");
     }
   }
 
@@ -2201,6 +2414,7 @@ function App() {
       let assembled = "";
       let chosenSurface: CommandView | undefined;
       let streamError: string | null = null;
+      let planProposed = false;
 
       const processFrame = (frame: string) => {
         let eventName = "message";
@@ -2220,6 +2434,21 @@ function App() {
           const chunk = (parsed as { text: string }).text;
           assembled += chunk;
           setOrbTurns((turns) => turns.map((t) => t.id === wardTurnId ? { ...t, text: assembled } : t));
+        } else if (eventName === "plan_proposed") {
+          const planObj = (parsed as { plan?: OrbPlanProposal; human_summary?: string });
+          if (planObj.plan && Array.isArray(planObj.plan.steps)) {
+            const proposal = planObj.plan;
+            const summaryText = typeof planObj.human_summary === "string" ? planObj.human_summary : assembled;
+            assembled = summaryText;
+            planProposed = true;
+            setOrbTurns((turns) => turns.map((t) => t.id === wardTurnId
+              ? { ...t, text: summaryText, plan: proposal, planStatus: "awaiting", steps: [], watches: [] }
+              : t));
+            if (overview && overview.profile.tts_enabled) {
+              const intro = proposal.intent.replace(/\.$/, "");
+              speak(`${intro}. Run it?`, overview.profile);
+            }
+          }
         } else if (eventName === "done") {
           const surface = (parsed as { surface?: string }).surface;
           if (typeof surface === "string") {
@@ -2253,7 +2482,7 @@ function App() {
       } else {
         pulseOrb();
         applyOrbSurface(chosenSurface);
-        if (assembled.trim().length > 0 && overview && overview.profile.tts_enabled) {
+        if (!planProposed && assembled.trim().length > 0 && overview && overview.profile.tts_enabled) {
           speak(assembled, overview.profile);
         }
       }
@@ -2282,6 +2511,193 @@ function App() {
     }
   }
 
+  function watchOrbSession(turnId: string, sessionId: string) {
+    setOrbTurns((turns) => turns.map((t) => t.id === turnId
+      ? { ...t, watches: [...(t.watches ?? []), { session_id: sessionId, states: [], terminal: false }] }
+      : t));
+    let lastState: string | null = null;
+    const source = new EventSource(`/api/sessions/${encodeURIComponent(sessionId)}/events`);
+    const close = () => {
+      source.close();
+    };
+    const updateWatch = (mut: (watch: OrbSessionWatch) => OrbSessionWatch) => {
+      setOrbTurns((turns) => turns.map((t) => {
+        if (t.id !== turnId) return t;
+        const watches = (t.watches ?? []).map((w) => w.session_id === sessionId ? mut(w) : w);
+        return { ...t, watches };
+      }));
+    };
+    const onEvent = (raw: MessageEvent) => {
+      try {
+        const data = JSON.parse(raw.data) as { event_type?: string; payload?: Record<string, unknown> };
+        if (data.event_type === "session.state_changed") {
+          const next = typeof data.payload?.to_state === "string" ? data.payload.to_state : null;
+          if (next && next !== lastState) {
+            lastState = next;
+            updateWatch((w) => ({ ...w, states: [...w.states, next] }));
+            if (["done", "failed", "blocked", "canceled"].includes(next)) {
+              updateWatch((w) => ({
+                ...w,
+                terminal: true,
+                summary: next === "done" ? "Session done." : `Session ${next}.`
+              }));
+              close();
+            }
+          }
+        }
+      } catch {
+        // ignore non-JSON keepalives
+      }
+    };
+    source.addEventListener("session.state_changed", onEvent as EventListener);
+    source.onerror = () => {
+      updateWatch((w) => w.terminal ? w : { ...w, terminal: true, summary: w.summary ?? "Watcher disconnected." });
+      close();
+    };
+  }
+
+  async function runOrbConductorPlan(turnId: string) {
+    const turn = orbTurns.find((t) => t.id === turnId);
+    if (!turn || !turn.plan || turn.planStatus !== "awaiting") return;
+    const plan = turn.plan;
+    setOrbTurns((turns) => turns.map((t) => t.id === turnId
+      ? { ...t, planStatus: "running", steps: [] }
+      : t));
+    try {
+      const response = await fetch("/api/orb/conductor/execute", {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "text/event-stream" },
+        body: JSON.stringify({ plan })
+      });
+      if (!response.ok || !response.body) {
+        const detail = await response.text().catch(() => "");
+        throw new Error(`Conductor execute failed (${response.status}): ${detail.slice(0, 200) || response.statusText}`);
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let chainSummary: string | undefined;
+      let chainFailed = false;
+      const sessionsToWatch: string[] = [];
+
+      const processFrame = (frame: string) => {
+        let eventName = "message";
+        let dataLine = "";
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("event:")) eventName = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataLine += line.slice(5).trim();
+        }
+        if (!dataLine) return;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(dataLine);
+        } catch {
+          return;
+        }
+        if (eventName === "step_started") {
+          const evt = parsed as OrbStepEvent;
+          setOrbTurns((turns) => turns.map((t) => t.id === turnId
+            ? { ...t, steps: [...(t.steps ?? []), { step_index: evt.step_index, kind: evt.kind, human: evt.human }] }
+            : t));
+        } else if (eventName === "step_completed") {
+          const evt = parsed as OrbStepEvent;
+          setOrbTurns((turns) => turns.map((t) => {
+            if (t.id !== turnId) return t;
+            const steps = (t.steps ?? []).map((s) => s.step_index === evt.step_index
+              ? { ...s, result: evt.result }
+              : s);
+            return { ...t, steps };
+          }));
+          if (evt.kind === "launch_session" && evt.result && typeof evt.result.session_id === "string") {
+            sessionsToWatch.push(evt.result.session_id);
+          }
+        } else if (eventName === "chain_completed") {
+          const summary = (parsed as { summary?: string }).summary;
+          if (typeof summary === "string") chainSummary = summary;
+        } else if (eventName === "error") {
+          chainFailed = true;
+          const stepIndex = (parsed as { step_index?: number }).step_index;
+          const message = (parsed as { message?: string }).message ?? "Step failed.";
+          setOrbTurns((turns) => turns.map((t) => {
+            if (t.id !== turnId) return t;
+            const steps = (t.steps ?? []).map((s) => typeof stepIndex === "number" && s.step_index === stepIndex
+              ? { ...s, error: message }
+              : s);
+            return { ...t, steps };
+          }));
+        }
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let frameEnd = buffer.indexOf("\n\n");
+        while (frameEnd >= 0) {
+          processFrame(buffer.slice(0, frameEnd));
+          buffer = buffer.slice(frameEnd + 2);
+          frameEnd = buffer.indexOf("\n\n");
+        }
+      }
+      if (buffer.trim().length > 0) processFrame(buffer);
+
+      const friendlySummary = (() => {
+        if (chainFailed) return "I hit an error partway through. Take a look at the failed step.";
+        const turn = orbTurns.find((t) => t.id === turnId);
+        const planSteps = turn?.plan?.steps ?? [];
+        const phrases: string[] = [];
+        for (const [idx, step] of planSteps.entries()) {
+          if (step.kind === "create_task") {
+            const title = typeof step.args?.title === "string" ? step.args.title : "the task";
+            const slug = typeof step.args?.workspace_slug === "string" ? step.args.workspace_slug : "your workspace";
+            phrases.push(`created ${title} in ${slug}`);
+          } else if (step.kind === "launch_session") {
+            const brain = typeof step.args?.brain_id === "string" ? step.args.brain_id : "a brain";
+            phrases.push(`launched ${brain}`);
+          } else if (step.kind === "read_overview") {
+            phrases.push("read your overview");
+          } else if (step.kind === "read_workspace") {
+            const slug = typeof step.args?.workspace_slug === "string" ? step.args.workspace_slug : "the workspace";
+            phrases.push(`read ${slug}`);
+          } else if (step.kind === "read_session") {
+            phrases.push(`read session ${idx + 1}`);
+          }
+        }
+        if (phrases.length === 0) return chainSummary ?? "Done.";
+        if (phrases.length === 1) return `Done. ${phrases[0]}.`;
+        return `Done. ${phrases.slice(0, -1).join(", ")} and ${phrases[phrases.length - 1]}.`;
+      })();
+      setOrbTurns((turns) => turns.map((t) => t.id === turnId
+        ? { ...t, planStatus: chainFailed ? "failed" : "completed", chainSummary: friendlySummary }
+        : t));
+      pulseOrb();
+      if (overview && overview.profile.tts_enabled) {
+        speak(friendlySummary, overview.profile);
+      }
+      // Refresh surfaces so newly created tasks/sessions appear without leaving home.
+      refresh().catch(() => undefined);
+      if (selectedSlug) {
+        refreshDetail(selectedSlug).catch(() => undefined);
+        refreshSessionSurface(selectedSlug).catch(() => undefined);
+      }
+      for (const sessionId of sessionsToWatch) {
+        watchOrbSession(turnId, sessionId);
+      }
+    } catch (err) {
+      const messageText = (err as Error).message;
+      setError(messageText);
+      setOrbTurns((turns) => turns.map((t) => t.id === turnId
+        ? { ...t, planStatus: "failed", chainSummary: messageText }
+        : t));
+    }
+  }
+
+  function cancelOrbConductorPlan(turnId: string) {
+    setOrbTurns((turns) => turns.map((t) => t.id === turnId
+      ? { ...t, planStatus: "canceled", chainSummary: "Plan canceled. No changes were made." }
+      : t));
+  }
+
   const planRounds: PlanRoundName[] = ["context", "proposal", "critique", "convergence", "decision"];
   const latestRound = planDetail?.rounds[planDetail.rounds.length - 1] ?? null;
   const latestSnapshot = repoSnapshots[0] ?? null;
@@ -2296,6 +2712,7 @@ function App() {
   ];
   const activeCommand = commandTabs.find((tab) => tab.id === activeView) ?? commandTabs[0];
   const latestOrbReply = [...orbTurns].reverse().find((turn) => turn.role === "ward")?.text;
+  const awaitingPlanTurn = [...orbTurns].reverse().find((turn) => turn.role === "ward" && turn.plan && turn.planStatus === "awaiting") ?? null;
   const mcpScopeTabs: Array<{ id: McpScopeView; label: string; meta: string; disabled?: boolean }> = [
     { id: "effective", label: "Effective", meta: String(mcpSummary.total) },
     { id: "global", label: "Global", meta: String(Object.keys(mcpScopes.global?.config.mcpServers ?? {}).length) },
@@ -2308,7 +2725,7 @@ function App() {
       <div className="orb-background" aria-hidden="true" />
       <header className="orb-topbar">
         <div className="orb-topbar-left">
-          <p className="ward-logo"><span className="bolt">⚡</span> WARD</p>
+          <p className="ward-logo"><span className="bolt">⚡</span> W.A.R.D.</p>
           <div className="orb-menu-wrap-inner">
             <button
               type="button"
@@ -2411,6 +2828,7 @@ function App() {
                 {orbTurns.slice(-12).map((turn, idx, list) => {
                   const isLastWard = idx === list.length - 1 && turn.role === "ward";
                   const showTyping = isLastWard && orbBusy && turn.text.length === 0;
+                  const isAwaiting = turn.role === "ward" && turn.plan && turn.planStatus === "awaiting";
                   return (
                     <div className={turn.role === "ward" ? "ward" : "user"} key={turn.id}>
                       <span>{turn.role === "ward" ? "WARD" : "You"}</span>
@@ -2419,6 +2837,54 @@ function App() {
                       ) : (
                         <p>{turn.text}</p>
                       )}
+                      {turn.role === "ward" && turn.plan ? (
+                        <div className="orb-plan">
+                          {turn.steps && turn.steps.length > 0 ? (
+                            <ul className="orb-plan-steps">
+                              {turn.steps.map((step) => (
+                                <li key={`${turn.id}-step-${step.step_index}`}>
+                                  <span className="dot">{step.error ? "×" : step.result ? "✓" : "•"}</span>
+                                  <span className="kind">[{step.kind}]</span>
+                                  <span className="human">{step.error ?? step.human ?? ""}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : null}
+                          {turn.watches && turn.watches.length > 0 ? (
+                            <ul className="orb-plan-watches">
+                              {turn.watches.map((watch) => (
+                                <li key={`${turn.id}-watch-${watch.session_id}`}>
+                                  <span className="watch-id">{watch.session_id.slice(0, 16)}</span>
+                                  <span className="watch-trace">
+                                    {watch.states.length === 0 ? "watching…" : watch.states.join(" → ")}
+                                  </span>
+                                  {watch.summary ? <span className="watch-summary">{watch.summary}</span> : null}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : null}
+                          {turn.chainSummary ? <p className="orb-plan-summary">{turn.chainSummary}</p> : null}
+                          {isAwaiting ? (
+                            <div className="orb-plan-confirm">
+                              <button
+                                type="button"
+                                className="orb-plan-run"
+                                onClick={() => runOrbConductorPlan(turn.id).catch((err) => setError(err.message))}
+                              >
+                                ✓ Run plan
+                              </button>
+                              <button
+                                type="button"
+                                className="orb-plan-cancel"
+                                onClick={() => cancelOrbConductorPlan(turn.id)}
+                              >
+                                ✕ Cancel
+                              </button>
+                              <span className="orb-plan-hint">⌘↵ run · esc cancel</span>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })}
@@ -3214,6 +3680,133 @@ function App() {
                       </button>
                     </div>
                   </div>
+
+                  {(() => {
+                    const headerTokens = estimateOrbTokens(
+                      orbSystemDraft.trim().length > 0 ? orbSystemDraft : "You are WARD, the user's local peer developer. Tone: casual. Reply in 1-3 short sentences unless asked for more."
+                    );
+                    const stateTokens = (orbContext.includeWorkspaces ? 30 : 0)
+                      + (orbContext.includeTasks ? 80 : 0)
+                      + (orbContext.includeSessions ? 80 : 0)
+                      + (orbContext.includeWiki ? 60 : 0)
+                      + 30; // date + profile + closing
+                    const totalEstimate = headerTokens + stateTokens;
+                    const draftDirty = orbSystemDraft !== orbContext.systemPrompt;
+                    return (
+                      <div className="glass-card orb-context-card">
+                        <h3>Orb context</h3>
+                        <label className="orb-context-label">
+                          System instruction
+                          <textarea
+                            className="orb-context-textarea"
+                            rows={6}
+                            value={orbSystemDraft}
+                            onChange={(event) => setOrbSystemDraft(event.target.value)}
+                            placeholder="You are WARD, {name}'s local peer developer. Tone: {tone}. Reply in 1-3 short sentences unless asked for more."
+                          />
+                        </label>
+                        <p className="hint">
+                          Override how the orb introduces itself. Leave blank to use the default. State context is appended automatically.
+                        </p>
+                        <div className="orb-context-actions">
+                          <Button
+                            type="button"
+                            disabled={!draftDirty || orbContextBusy === "save-prompt"}
+                            onClick={() => saveOrbSystemPrompt().catch((err) => setError(err.message))}
+                          >
+                            {orbContextBusy === "save-prompt" ? "Saving…" : "Save"}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            disabled={orbContextBusy === "reset"}
+                            onClick={() => resetOrbContext().catch((err) => setError(err.message))}
+                          >
+                            {orbContextBusy === "reset" ? "Resetting…" : "Reset to default"}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            disabled={orbContextBusy === "test"}
+                            onClick={() => runOrbContextTest().catch((err) => setError(err.message))}
+                          >
+                            {orbContextBusy === "test" ? "Testing…" : "▶ Test reply"}
+                          </Button>
+                          <span className="hint orb-context-tokens">
+                            ~ {totalEstimate} / {orbContext.tokenBudget} tokens
+                          </span>
+                        </div>
+                        {orbContextMessage ? <p className="hint">{orbContextMessage}</p> : null}
+                        {orbContextTest?.reply ? (
+                          <div className="moderator">
+                            <strong>Test reply</strong>
+                            <p>{orbContextTest.reply}</p>
+                            {typeof orbContextTest.latency_ms === "number" ? <small className="hint">{orbContextTest.latency_ms} ms</small> : null}
+                          </div>
+                        ) : null}
+                        {orbContextTest?.error ? (
+                          <p className="hint" style={{ color: "#f4b8b8" }}>Test failed: {orbContextTest.error}</p>
+                        ) : null}
+
+                        <div className="orb-context-section">
+                          <strong>Include in context</strong>
+                          <label className="check-row">
+                            <input
+                              type="checkbox"
+                              checked={orbContext.includeWorkspaces}
+                              onChange={(event) => updateOrbContextField("includeWorkspaces", event.target.checked).catch((err) => setError(err.message))}
+                            />
+                            Workspace and repo path
+                          </label>
+                          <label className="check-row">
+                            <input
+                              type="checkbox"
+                              checked={orbContext.includeTasks}
+                              onChange={(event) => updateOrbContextField("includeTasks", event.target.checked).catch((err) => setError(err.message))}
+                            />
+                            Top 3 open tasks
+                          </label>
+                          <label className="check-row">
+                            <input
+                              type="checkbox"
+                              checked={orbContext.includeSessions}
+                              onChange={(event) => updateOrbContextField("includeSessions", event.target.checked).catch((err) => setError(err.message))}
+                            />
+                            Recent sessions (last 3)
+                          </label>
+                          <label className="check-row">
+                            <input
+                              type="checkbox"
+                              checked={orbContext.includeWiki}
+                              onChange={(event) => updateOrbContextField("includeWiki", event.target.checked).catch((err) => setError(err.message))}
+                            />
+                            Wiki snippets (experimental)
+                          </label>
+                        </div>
+
+                        <div className="orb-context-section">
+                          <strong>Token budget</strong>
+                          <div className="orb-context-slider-row">
+                            <input
+                              type="range"
+                              min={200}
+                              max={1500}
+                              step={50}
+                              value={orbContext.tokenBudget}
+                              onChange={(event) => {
+                                const next = Number(event.target.value);
+                                setOrbContext((prev) => ({ ...prev, tokenBudget: next }));
+                              }}
+                              onPointerUp={() => updateOrbContextField("tokenBudget", orbContext.tokenBudget).catch((err) => setError(err.message))}
+                              onKeyUp={() => updateOrbContextField("tokenBudget", orbContext.tokenBudget).catch((err) => setError(err.message))}
+                            />
+                            <span className="hint">{orbContext.tokenBudget} tokens</span>
+                          </div>
+                          <p className="hint">Smaller budget = faster replies. Default keeps prefill light on local models.</p>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </>
               ) : (
                 <>
@@ -3283,7 +3876,7 @@ function App() {
                             {isOrchestrator ? (
                               <>
                                 <p className="hint">
-                                  Powers the orb. Base URL <code>{localBrainProbe?.base_url ?? "http://127.0.0.1:11434/v1"}</code> · model <code>{localBrainProbe?.model ?? "gemma4:e2b"}</code>.
+                                  Powers the orb. Base URL <code>{localBrainProbe?.base_url ?? "http://127.0.0.1:11434/v1"}</code> · model <code>{localBrainProbe?.model ?? "gemma4:e4b"}</code>.
                                 </p>
                                 <div className="probe-row">
                                   <Button type="button" variant="secondary" disabled={localBrainBusy !== ""} onClick={() => runLocalBrainProbe().catch((err) => setError(err.message))}>
@@ -3302,7 +3895,7 @@ function App() {
                                 </div>
                                 {localBrainProbe && !localBrainProbe.reachable ? (
                                   <p className="hint">
-                                    Start it with <code>ollama serve</code> and pull with <code>ollama pull {localBrainProbe.model ?? "gemma4:e2b"}</code>.
+                                    Start it with <code>ollama serve</code> and pull with <code>ollama pull {localBrainProbe.model ?? "gemma4:e4b"}</code>.
                                     {localBrainProbe.error ? ` Detail: ${localBrainProbe.error}` : ""}
                                   </p>
                                 ) : null}
