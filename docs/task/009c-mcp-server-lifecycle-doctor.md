@@ -1,6 +1,6 @@
 # Task 009C: MCP Server Lifecycle and Doctor
 
-- Status: `testing`
+- Status: `done`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `high`

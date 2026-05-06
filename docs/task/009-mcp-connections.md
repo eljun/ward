@@ -1,6 +1,6 @@
 # Task 009: MCP Connections Layer
 
-- Status: `in_progress`
+- Status: `done`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `high`

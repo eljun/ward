@@ -1,6 +1,6 @@
 # Task 009G: Settings Connections UI
 
-- Status: `testing`
+- Status: `done`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `medium`

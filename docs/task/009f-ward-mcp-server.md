@@ -1,6 +1,6 @@
 # Task 009F: WARD as a Read-Only MCP Server
 
-- Status: `testing`
+- Status: `done`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `medium`

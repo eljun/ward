@@ -16,66 +16,9 @@
 
 ## In Progress
 
-- [ ] `9` MCP Connections Layer
-  - Doc: [docs/task/009-mcp-connections.md](docs/task/009-mcp-connections.md)
-  - Goal: Three-scope MCP registry (global / workspace / repo, reuses `.mcp.json`); secrets via OS keychain; tool routing; autonomy-class policy; WARD-as-MCP-server.
-  - Current slice: 009G Settings Connections UI.
+_(none — pick the next planned task)_
 
 ## Testing
-
-- [ ] `9G` Settings Connections UI
-  - Doc: [docs/task/009g-connections-ui.md](docs/task/009g-connections-ui.md)
-  - Goal: Add Settings -> Connections for scoped/effective MCP config, conflicts, server status, tool counts, and safe enable/disable.
-
-- Task 009G Settings includes a Connections panel with Effective, Global, Workspace, and Repo views.
-- Task 009G Connections filters configured MCP servers by id, scope, status, profile, and tool names.
-- Task 009G Connections shows effective conflicts, origin paths, enabled state, transport summary, tool scopes, capability profiles, status, and tool counts.
-- Task 009G Global and Workspace rows can toggle editable MCP servers while Repo rows stay read-only.
-- Task 009G direct fixture MCP config smoke verifies effective config, scoped config, doctor status, tool count, and redacted `secret://` references.
-
-- [ ] `9F` WARD as a Read-Only MCP Server
-  - Doc: [docs/task/009f-ward-mcp-server.md](docs/task/009f-ward-mcp-server.md)
-  - Goal: Expose WARD workspaces, sessions, plans, wiki, search, blockers, and status as read-only MCP tools over stdio.
-
-- Task 009F `ward mcp-serve` responds to MCP `initialize`.
-- Task 009F `tools/list` returns only the ten read-only `ward.*` tools.
-- Task 009F unauthenticated non-status reads return a token-required denial.
-- Task 009F authenticated `ward.list_workspaces` returns workspace summaries.
-- Task 009F tokenless `ward.status` returns a synthetic status acknowledgement.
-
-- [ ] `9E` MCP Tool Proxy and Circuit Breakers
-  - Doc: [docs/task/009e-mcp-tool-proxy-circuit-breakers.md](docs/task/009e-mcp-tool-proxy-circuit-breakers.md)
-  - Goal: Dispatch allowed MCP tool calls through WARD policy, emit events, and freeze failing servers through quota-backed circuit breakers.
-
-- Task 009E allowed fixture `tools/call` reaches the MCP fixture server and returns a result.
-- Task 009E allowlist/autonomy denials return synthetic `tool_not_allowed` before dispatch.
-- Task 009E repeated fixture failures open the MCP server circuit breaker.
-- Task 009E open breaker returns synthetic `server_unavailable`.
-- Task 009E `ward quota unfreeze mcp_server <server>` clears the open breaker.
-- Task 009E `quota_ledger` records MCP request, failure, freeze, and unfreeze rows.
-- Task 009E MCP event payloads and stderr logs redact injected token values.
-
-- [ ] `9D` MCP Tool Classification and Autonomy Policy
-  - Doc: [docs/task/009d-mcp-tool-classification-autonomy.md](docs/task/009d-mcp-tool-classification-autonomy.md)
-  - Goal: Classify MCP tools, apply overrides, expand capability profiles, and enforce autonomy/allowlist decisions before dispatch.
-
-- Task 009D classifies `repos.get`, `issues.create`, `repos.delete`, and `payments.transfer` as read/write/destructive/privileged.
-- Task 009D config overrides beat heuristic classification.
-- Task 009D strict/standard/lenient autonomy gates return structured allow/deny decisions.
-- Task 009D per-run allowlist denial returns a synthetic `tool_not_allowed` result and denial payload.
-- Task 009D capability profiles expand to wildcard tool patterns.
-- Task 009D `ward mcp policy` and `POST /api/mcp/policy` smoke checks pass.
-
-- [ ] `9C` MCP Server Lifecycle and Doctor
-  - Doc: [docs/task/009c-mcp-server-lifecycle-doctor.md](docs/task/009c-mcp-server-lifecycle-doctor.md)
-  - Goal: Verify enabled stdio MCP servers, persist status snapshots, capture stderr logs, and expose `ward mcp doctor`.
-
-- Task 009C fresh init applies schema version 9 and creates `mcp_server_status`.
-- Task 009C fixture MCP server passes `ward mcp doctor` with two tools.
-- Task 009C `ward mcp servers` returns the persisted status snapshot.
-- Task 009C direct API smoke passes for `GET /api/mcp/servers` and `POST /api/mcp/doctor`.
-- Task 009C stderr log capture redacts the injected fixture token.
-- Task 009C invalid JSON, timeout, and missing executable fixtures report `status: error` without crashing runtime.
 - `bun install --frozen-lockfile`
 - `bun run build`
 - `WARD_HOME=/tmp/ward-codex-smoke bun run ward --json init`
@@ -217,6 +160,30 @@
 - Task 009B secrets set/list/unset/rotate works with file fallback, doctor reports the backend, MCP overlays resolve workspace secrets, rotation updates overlays, and workspace unset falls back to global.
 
 ## Done
+
+- [x] `9` MCP Connections Layer
+  - Doc: [docs/task/009-mcp-connections.md](docs/task/009-mcp-connections.md)
+  - Goal: Three-scope MCP registry (global / workspace / repo, reuses `.mcp.json`); secrets via OS keychain; tool routing; autonomy-class policy; WARD-as-MCP-server.
+
+- [x] `9G` Settings Connections UI
+  - Doc: [docs/task/009g-connections-ui.md](docs/task/009g-connections-ui.md)
+  - Goal: Add Settings -> Connections for scoped/effective MCP config, conflicts, server status, tool counts, and safe enable/disable.
+
+- [x] `9F` WARD as a Read-Only MCP Server
+  - Doc: [docs/task/009f-ward-mcp-server.md](docs/task/009f-ward-mcp-server.md)
+  - Goal: Expose WARD workspaces, sessions, plans, wiki, search, blockers, and status as read-only MCP tools over stdio.
+
+- [x] `9E` MCP Tool Proxy and Circuit Breakers
+  - Doc: [docs/task/009e-mcp-tool-proxy-circuit-breakers.md](docs/task/009e-mcp-tool-proxy-circuit-breakers.md)
+  - Goal: Dispatch allowed MCP tool calls through WARD policy, emit events, and freeze failing servers through quota-backed circuit breakers.
+
+- [x] `9D` MCP Tool Classification and Autonomy Policy
+  - Doc: [docs/task/009d-mcp-tool-classification-autonomy.md](docs/task/009d-mcp-tool-classification-autonomy.md)
+  - Goal: Classify MCP tools, apply overrides, expand capability profiles, and enforce autonomy/allowlist decisions before dispatch.
+
+- [x] `9C` MCP Server Lifecycle and Doctor
+  - Doc: [docs/task/009c-mcp-server-lifecycle-doctor.md](docs/task/009c-mcp-server-lifecycle-doctor.md)
+  - Goal: Verify enabled stdio MCP servers, persist status snapshots, capture stderr logs, and expose `ward mcp doctor`.
 
 - [x] `9B` Secrets and macOS Keychain Fallback
   - Doc: [docs/task/009b-secrets-keychain-fallback.md](docs/task/009b-secrets-keychain-fallback.md)

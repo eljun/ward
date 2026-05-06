@@ -1,6 +1,6 @@
 # Task 009D: MCP Tool Classification and Autonomy Policy
 
-- Status: `testing`
+- Status: `done`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `high`
