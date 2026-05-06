@@ -546,6 +546,10 @@ h2 {
   grid-column: span 2;
 }
 
+.connections-panel {
+  grid-column: 1 / -1;
+}
+
 .routes-panel {
   grid-column: span 2;
 }
@@ -820,6 +824,214 @@ h2 {
 .quota-list {
   display: grid;
   gap: 10px;
+}
+
+.connection-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.connection-summary div {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  display: grid;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.connection-summary strong {
+  font-size: 1.1rem;
+}
+
+.connection-summary span {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.connection-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.connection-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.connection-tabs button {
+  min-height: 48px;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.58);
+  color: var(--ink);
+  padding: 8px 10px;
+  box-shadow: none;
+}
+
+.connection-tabs button[aria-pressed="true"] {
+  border-color: rgba(47, 127, 120, 0.45);
+  background: rgba(239, 249, 246, 0.82);
+}
+
+.connection-tabs button:disabled {
+  color: var(--muted);
+  opacity: 0.65;
+}
+
+.connection-tabs span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.connection-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.connection-buttons button {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.connection-search {
+  width: 100%;
+}
+
+.connection-path,
+.connection-doctor {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(105, 126, 140, 0.22);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.connection-path span,
+.connection-doctor span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.connection-conflicts {
+  display: grid;
+  gap: 8px;
+}
+
+.connection-conflicts div,
+.connection-warning,
+.connection-error {
+  border: 1px solid rgba(180, 129, 40, 0.24);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: rgba(255, 248, 226, 0.72);
+  color: #68470d;
+  font-size: 0.82rem;
+}
+
+.connection-conflicts div {
+  display: grid;
+  gap: 2px;
+}
+
+.connection-conflicts span {
+  font-size: 0.78rem;
+}
+
+.connection-error {
+  border-color: rgba(184, 74, 74, 0.26);
+  background: rgba(255, 239, 239, 0.72);
+  color: #7b2727;
+}
+
+.connection-list {
+  display: grid;
+  gap: 10px;
+}
+
+.connection-row {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.connection-row.active {
+  border-color: rgba(47, 127, 120, 0.38);
+  background: rgba(247, 252, 250, 0.78);
+}
+
+.connection-row-head,
+.connection-row-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 12px;
+}
+
+.connection-row-head > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.connection-row-head span,
+.connection-origin,
+.connection-row-actions span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.connection-row-badges,
+.connection-meta,
+.connection-tags,
+.connection-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.connection-meta span,
+.connection-tags span,
+.connection-tools span {
+  border: 1px solid rgba(105, 126, 140, 0.22);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.58);
+  font-size: 0.76rem;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.connection-tools span {
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.connection-row-actions button {
+  min-height: 34px;
+  min-width: 96px;
+  padding-inline: 10px;
 }
 
 .brain-control {
@@ -1261,6 +1473,12 @@ h2 {
     .session-actions,
     .metrics,
     .session-metrics,
+    .connection-summary,
+    .connection-toolbar,
+    .connection-tabs,
+    .connection-buttons,
+    .connection-path,
+    .connection-doctor,
     .session-status-strip,
     .route-row,
     .cost-metrics,
@@ -1281,6 +1499,7 @@ h2 {
   }
 
   .brains-panel,
+  .connections-panel,
   .routes-panel {
     grid-column: auto;
   }
@@ -1301,6 +1520,19 @@ h2 {
 
   .orb-stage {
     padding-top: 56px;
+  }
+
+  .connection-path,
+  .connection-doctor,
+  .connection-row-head,
+  .connection-row-actions {
+    display: grid;
+    gap: 8px;
+  }
+
+  .connection-path span,
+  .connection-doctor span {
+    text-align: left;
   }
 
   .ward-orb {

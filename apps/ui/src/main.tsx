@@ -366,6 +366,108 @@ type QuotaLedgerEntry = {
   created_at: string;
 };
 
+type McpScope = "global" | "workspace" | "repo";
+type McpScopeView = "effective" | McpScope;
+
+type McpToolSummary = {
+  name: string;
+  description?: string;
+  input_schema?: unknown;
+};
+
+type McpServerConfig = {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  transport?: "stdio" | "http";
+  url?: string;
+  headers?: Record<string, string>;
+  ward_tool_scopes?: string[];
+  ward_enabled?: boolean;
+  ward_tool_class_overrides?: Record<string, string>;
+  ward_capability_profiles?: string[];
+};
+
+type McpServerOrigin = {
+  scope: McpScope;
+  path: string;
+  workspace_slug?: string;
+  repo_path?: string;
+  primary_repo?: boolean;
+};
+
+type McpConflict = {
+  server_id: string;
+  winner: McpServerOrigin;
+  shadowed: McpServerOrigin;
+  reason: string;
+};
+
+type EffectiveMcpServer = {
+  id: string;
+  origin: McpServerOrigin;
+  config: McpServerConfig;
+  conflicts: McpConflict[];
+};
+
+type EffectiveMcpConfig = {
+  workspace_id: number | null;
+  workspace_slug: string | null;
+  include_repo: boolean;
+  generated_at: string;
+  servers: EffectiveMcpServer[];
+  conflicts: McpConflict[];
+};
+
+type ScopedMcpConfig = {
+  scope: McpScope;
+  workspace: string | null;
+  path: string;
+  config: {
+    mcpServers: Record<string, McpServerConfig>;
+  };
+};
+
+type McpServerStatusSnapshot = {
+  server_id: string;
+  workspace_id: number | null;
+  workspace_slug: string | null;
+  scope: McpScope;
+  origin_path: string;
+  transport: "stdio" | "http";
+  enabled: boolean;
+  status: "ok" | "error" | "disabled" | "unsupported";
+  tool_count: number;
+  tools: McpToolSummary[];
+  error: string | null;
+  stderr_log_path: string | null;
+  checked_at: string;
+  duration_ms: number;
+  trace_id: string;
+};
+
+type McpDoctorResult = {
+  ok: boolean;
+  workspace_id: number | null;
+  workspace_slug: string | null;
+  generated_at: string;
+  checks: McpServerStatusSnapshot[];
+  summary: {
+    total: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+  };
+};
+
+type McpDisplayServer = {
+  id: string;
+  origin: McpServerOrigin;
+  config: McpServerConfig;
+  conflicts: McpConflict[];
+  editable: boolean;
+};
+
 type CommandView = "overview" | "workspaces" | "planning" | "sessions" | "memory" | "settings";
 
 type OrbChatResponse = {
@@ -522,6 +624,48 @@ function formatMetric(value: number, metric: string): string {
     return formatDollars(value);
   }
   return String(value);
+}
+
+function mcpEnabled(config: McpServerConfig): boolean {
+  return config.ward_enabled !== false;
+}
+
+function safeUrlSummary(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return value.split("?")[0] || value;
+  }
+}
+
+function mcpTransportSummary(config: McpServerConfig): string {
+  const transport = config.transport ?? (config.url ? "http" : "stdio");
+  if (transport === "http") {
+    return config.url ? safeUrlSummary(config.url) : "HTTP endpoint pending";
+  }
+  const argCount = config.args?.length ?? 0;
+  return `${config.command ?? "command pending"}${argCount ? ` · ${argCount} args` : ""}`;
+}
+
+function mcpStatusTone(status?: McpServerStatusSnapshot["status"]) {
+  if (status === "ok") {
+    return "success" as const;
+  }
+  if (status === "error") {
+    return "danger" as const;
+  }
+  if (status === "disabled" || status === "unsupported") {
+    return "warning" as const;
+  }
+  return "default" as const;
+}
+
+function mcpStatusLabel(status?: McpServerStatusSnapshot): string {
+  if (!status) {
+    return "not checked";
+  }
+  return status.status === "ok" ? "ok" : status.status;
 }
 
 function brainDisplayName(brain: BrainConfig | null | undefined, fallbackId?: string | null): string {
@@ -753,6 +897,13 @@ function App() {
   const [brainBudgets, setBrainBudgets] = useState<BrainBudgetStatus[]>([]);
   const [quotaLedger, setQuotaLedger] = useState<QuotaLedgerEntry[]>([]);
   const [brainBusy, setBrainBusy] = useState("");
+  const [mcpEffective, setMcpEffective] = useState<EffectiveMcpConfig | null>(null);
+  const [mcpScopes, setMcpScopes] = useState<Partial<Record<McpScope, ScopedMcpConfig>>>({});
+  const [mcpStatuses, setMcpStatuses] = useState<McpServerStatusSnapshot[]>([]);
+  const [mcpDoctor, setMcpDoctor] = useState<McpDoctorResult | null>(null);
+  const [mcpScopeView, setMcpScopeView] = useState<McpScopeView>("effective");
+  const [mcpQuery, setMcpQuery] = useState("");
+  const [mcpBusy, setMcpBusy] = useState("");
   const [activeView, setActiveView] = useState<CommandView>("overview");
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
@@ -793,6 +944,79 @@ function App() {
     () => new Map(brainBudgets.map((budget) => [budget.brain_id, budget])),
     [brainBudgets]
   );
+  const mcpStatusByKey = useMemo(() => {
+    const map = new Map<string, McpServerStatusSnapshot>();
+    for (const status of mcpStatuses) {
+      map.set(`${status.server_id}:${status.origin_path}`, status);
+      if (!map.has(status.server_id)) {
+        map.set(status.server_id, status);
+      }
+    }
+    return map;
+  }, [mcpStatuses]);
+  const mcpDisplayServers = useMemo<McpDisplayServer[]>(() => {
+    if (mcpScopeView === "effective") {
+      return (mcpEffective?.servers ?? []).map((server) => ({
+        id: server.id,
+        origin: server.origin,
+        config: server.config,
+        conflicts: server.conflicts,
+        editable: server.origin.scope === "global" || server.origin.scope === "workspace"
+      }));
+    }
+    const scoped = mcpScopes[mcpScopeView];
+    if (!scoped) {
+      return [];
+    }
+    return Object.entries(scoped.config.mcpServers).map(([id, config]) => ({
+      id,
+      origin: {
+        scope: scoped.scope,
+        path: scoped.path,
+        workspace_slug: scoped.workspace ?? undefined,
+        primary_repo: scoped.scope === "repo" ? true : undefined
+      },
+      config,
+      conflicts: [],
+      editable: scoped.scope === "global" || scoped.scope === "workspace"
+    })).sort((a, b) => a.id.localeCompare(b.id));
+  }, [mcpEffective?.servers, mcpScopeView, mcpScopes]);
+  const filteredMcpServers = useMemo(() => {
+    const query = mcpQuery.trim().toLowerCase();
+    if (!query) {
+      return mcpDisplayServers;
+    }
+    return mcpDisplayServers.filter((server) => {
+      const status = mcpStatusByKey.get(`${server.id}:${server.origin.path}`) ?? mcpStatusByKey.get(server.id);
+      const haystack = [
+        server.id,
+        server.origin.scope,
+        server.origin.path,
+        server.config.transport ?? "stdio",
+        server.config.command,
+        server.config.url,
+        status?.status,
+        ...(server.config.ward_tool_scopes ?? []),
+        ...(server.config.ward_capability_profiles ?? []),
+        ...(status?.tools.map((tool) => tool.name) ?? [])
+      ].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [mcpDisplayServers, mcpQuery, mcpStatusByKey]);
+  const mcpSummary = useMemo(() => {
+    const enabled = (mcpEffective?.servers ?? []).filter((server) => mcpEnabled(server.config)).length;
+    const ok = mcpStatuses.filter((status) => status.status === "ok").length;
+    const errors = mcpStatuses.filter((status) => status.status === "error").length;
+    const tools = mcpStatuses.reduce((total, status) => total + status.tool_count, 0);
+    return {
+      total: mcpEffective?.servers.length ?? 0,
+      enabled,
+      ok,
+      errors,
+      tools,
+      conflicts: mcpEffective?.conflicts.length ?? 0
+    };
+  }, [mcpEffective?.conflicts.length, mcpEffective?.servers, mcpStatuses]);
   const latestSessionIssue = useMemo(
     () => [...(sessionDetail?.events ?? [])].reverse().find((event) => {
       const payload = asRecord(event.payload);
@@ -827,6 +1051,49 @@ function App() {
     setQuotaLedger(quotaResponse.ledger);
   }
 
+  async function refreshConnections(slug = selectedSlug) {
+    setMcpBusy("refresh");
+    const workspaceSuffix = slug ? `?workspace=${encodeURIComponent(slug)}` : "";
+    try {
+      const [effectiveResponse, statusResponse, globalResponse, workspaceResponse, repoResponse] = await Promise.all([
+        api<{ effective: EffectiveMcpConfig }>(`/api/mcp/effective${workspaceSuffix}`),
+        api<{ servers: McpServerStatusSnapshot[] }>(`/api/mcp/servers${workspaceSuffix}`).catch(() => ({ servers: [] })),
+        api<ScopedMcpConfig>("/api/mcp/scopes/global/servers"),
+        slug
+          ? api<ScopedMcpConfig>(`/api/mcp/scopes/workspace/servers?workspace=${encodeURIComponent(slug)}`).catch(() => null)
+          : Promise.resolve(null),
+        slug
+          ? api<ScopedMcpConfig>(`/api/mcp/scopes/repo/servers?workspace=${encodeURIComponent(slug)}`).catch(() => null)
+          : Promise.resolve(null)
+      ]);
+      setMcpEffective(effectiveResponse.effective);
+      setMcpStatuses(statusResponse.servers);
+      setMcpScopes({
+        global: globalResponse,
+        ...(workspaceResponse ? { workspace: workspaceResponse } : {}),
+        ...(repoResponse ? { repo: repoResponse } : {})
+      });
+    } finally {
+      setMcpBusy("");
+    }
+  }
+
+  async function runMcpDoctor() {
+    setMcpBusy("doctor");
+    try {
+      const response = await api<{ doctor: McpDoctorResult }>(`/api/mcp/doctor${selectedSlug ? `?workspace=${encodeURIComponent(selectedSlug)}` : ""}`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      setMcpDoctor(response.doctor);
+      setMcpStatuses(response.doctor.checks);
+      setMessage(`MCP doctor checked ${response.doctor.summary.total} server${response.doctor.summary.total === 1 ? "" : "s"}.`);
+      await refreshConnections(selectedSlug).catch(() => undefined);
+    } finally {
+      setMcpBusy("");
+    }
+  }
+
   async function refresh() {
     setError("");
     const [profileResponse, workspaceResponse, taskResponse, overviewResponse] = await Promise.all([
@@ -840,6 +1107,7 @@ function App() {
     setTasks(taskResponse.tasks);
     setOverview(overviewResponse.overview);
     await refreshBrainSurface();
+    await refreshConnections(selectedSlug || workspaceResponse.workspaces[0]?.slug || "");
     if (!selectedSlug && workspaceResponse.workspaces[0]) {
       setSelectedSlug(workspaceResponse.workspaces[0].slug);
     }
@@ -956,6 +1224,7 @@ function App() {
     refreshDetail(selectedSlug).catch((err) => setError(err.message));
     refreshPlanSurface(selectedSlug).catch((err) => setError(err.message));
     refreshSessionSurface(selectedSlug).catch((err) => setError(err.message));
+    refreshConnections(selectedSlug).catch((err) => setError(err.message));
   }, [selectedSlug]);
 
   useEffect(() => {
@@ -1052,6 +1321,26 @@ function App() {
       await refreshBrainSurface();
     } finally {
       setBrainBusy("");
+    }
+  }
+
+  async function toggleMcpServer(server: McpDisplayServer, enabled: boolean) {
+    if (server.origin.scope !== "global" && server.origin.scope !== "workspace") {
+      return;
+    }
+    setMcpBusy(`toggle:${server.origin.scope}:${server.id}`);
+    try {
+      await api(`/api/mcp/scopes/${server.origin.scope}/servers/${encodeURIComponent(server.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          workspace: server.origin.scope === "workspace" ? server.origin.workspace_slug ?? selectedSlug : undefined,
+          patch: { ward_enabled: enabled }
+        })
+      });
+      setMessage(`${server.id} ${enabled ? "enabled" : "disabled"}.`);
+      await refreshConnections(selectedSlug);
+    } finally {
+      setMcpBusy("");
     }
   }
 
@@ -1518,6 +1807,12 @@ function App() {
   ];
   const activeCommand = commandTabs.find((tab) => tab.id === activeView) ?? commandTabs[0];
   const latestOrbReply = [...orbTurns].reverse().find((turn) => turn.role === "ward")?.text;
+  const mcpScopeTabs: Array<{ id: McpScopeView; label: string; meta: string; disabled?: boolean }> = [
+    { id: "effective", label: "Effective", meta: String(mcpSummary.total) },
+    { id: "global", label: "Global", meta: String(Object.keys(mcpScopes.global?.config.mcpServers ?? {}).length) },
+    { id: "workspace", label: "Workspace", meta: selectedWorkspace?.slug ?? "none", disabled: !selectedWorkspace },
+    { id: "repo", label: "Repo", meta: mcpScopes.repo ? "linked" : "none", disabled: !selectedWorkspace }
+  ];
 
   return (
     <main className="orb-shell">
@@ -1743,6 +2038,144 @@ function App() {
           </div>
           <button type="submit">Save</button>
         </form>
+
+        <section className="panel connections-panel">
+          <div className="panel-title">
+            <h2>Connections</h2>
+            <span>{mcpEffective?.workspace_slug ?? selectedWorkspace?.slug ?? "global"}</span>
+          </div>
+          <div className="connection-summary">
+            <div>
+              <strong>{mcpSummary.enabled}</strong>
+              <span>enabled</span>
+            </div>
+            <div>
+              <strong>{mcpSummary.ok}</strong>
+              <span>healthy</span>
+            </div>
+            <div>
+              <strong>{mcpSummary.tools}</strong>
+              <span>tools</span>
+            </div>
+            <div>
+              <strong>{mcpSummary.conflicts}</strong>
+              <span>conflicts</span>
+            </div>
+          </div>
+          <div className="connection-toolbar">
+            <div className="connection-tabs" role="tablist" aria-label="MCP connection scopes">
+              {mcpScopeTabs.map((tab) => (
+                <button
+                  aria-pressed={mcpScopeView === tab.id}
+                  disabled={tab.disabled}
+                  key={tab.id}
+                  onClick={() => setMcpScopeView(tab.id)}
+                  type="button"
+                >
+                  <strong>{tab.label}</strong>
+                  <span>{tab.meta}</span>
+                </button>
+              ))}
+            </div>
+            <div className="connection-buttons">
+              <button type="button" disabled={Boolean(mcpBusy)} onClick={() => refreshConnections(selectedSlug).catch((err) => setError(err.message))}>
+                <RefreshCw className="size-4" />
+                Refresh
+              </button>
+              <button type="button" disabled={Boolean(mcpBusy)} onClick={() => runMcpDoctor().catch((err) => setError(err.message))}>
+                <Waypoints className="size-4" />
+                Doctor
+              </button>
+            </div>
+          </div>
+          <input
+            aria-label="Search MCP connections"
+            className="connection-search"
+            onChange={(event) => setMcpQuery(event.target.value)}
+            placeholder="Search servers, status, capability, tool"
+            value={mcpQuery}
+          />
+          {mcpScopeView !== "effective" ? (
+            <div className="connection-path">
+              <strong>{titleCase(mcpScopeView)} config</strong>
+              <span>{mcpScopes[mcpScopeView]?.path ?? (mcpScopeView === "repo" ? "No linked repo config found." : "No workspace selected.")}</span>
+            </div>
+          ) : null}
+          {mcpEffective && mcpEffective.conflicts.length > 0 ? (
+            <div className="connection-conflicts">
+              {mcpEffective.conflicts.map((conflict) => (
+                <div key={`${conflict.server_id}-${conflict.winner.path}-${conflict.shadowed.path}`}>
+                  <strong>{conflict.server_id}</strong>
+                  <span>{conflict.reason} · {conflict.winner.scope} wins</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="connection-list">
+            {filteredMcpServers.map((server) => {
+              const status = mcpStatusByKey.get(`${server.id}:${server.origin.path}`) ?? mcpStatusByKey.get(server.id);
+              const enabled = mcpEnabled(server.config);
+              const scopes = server.config.ward_tool_scopes?.length ? server.config.ward_tool_scopes : ["read"];
+              const capabilities = server.config.ward_capability_profiles ?? [];
+              const toggleBusy = mcpBusy === `toggle:${server.origin.scope}:${server.id}`;
+              return (
+                <div className={enabled ? "connection-row active" : "connection-row"} key={`${server.id}-${server.origin.scope}-${server.origin.path}`}>
+                  <div className="connection-row-head">
+                    <div>
+                      <strong>{server.id}</strong>
+                      <span>{server.origin.scope} · {mcpTransportSummary(server.config)}</span>
+                    </div>
+                    <div className="connection-row-badges">
+                      <Badge tone={enabled ? "success" : "default"}>{enabled ? "enabled" : "off"}</Badge>
+                      <Badge tone={mcpStatusTone(status?.status)}>{mcpStatusLabel(status)}</Badge>
+                    </div>
+                  </div>
+                  <div className="connection-meta">
+                    <span>{server.config.transport ?? (server.config.url ? "http" : "stdio")}</span>
+                    <span>{status ? `${status.tool_count} tools` : "doctor pending"}</span>
+                    <span>{status ? formatDuration(status.duration_ms) : "not checked"}</span>
+                    {server.origin.primary_repo ? <span>primary repo</span> : null}
+                  </div>
+                  <div className="connection-tags">
+                    {scopes.map((scope) => <span key={`${server.id}-scope-${scope}`}>{scope}</span>)}
+                    {capabilities.map((capability) => <span key={`${server.id}-cap-${capability}`}>{capability}</span>)}
+                    {capabilities.length === 0 ? <span>no profile</span> : null}
+                  </div>
+                  <div className="connection-origin">{server.origin.path}</div>
+                  {status?.tools.length ? (
+                    <div className="connection-tools">
+                      {status.tools.slice(0, 5).map((tool) => <span key={`${server.id}-tool-${tool.name}`}>{tool.name}</span>)}
+                      {status.tools.length > 5 ? <span>+{status.tools.length - 5}</span> : null}
+                    </div>
+                  ) : null}
+                  {server.conflicts.length > 0 ? (
+                    <div className="connection-warning">{server.conflicts.length} conflict{server.conflicts.length === 1 ? "" : "s"} shadowed by {server.origin.scope}</div>
+                  ) : null}
+                  {status?.error ? <div className="connection-error">{status.error}</div> : null}
+                  <div className="connection-row-actions">
+                    <span>redacted config</span>
+                    <button
+                      disabled={!server.editable || toggleBusy}
+                      onClick={() => toggleMcpServer(server, !enabled).catch((err) => setError(err.message))}
+                      type="button"
+                    >
+                      {server.editable ? toggleBusy ? "Saving..." : enabled ? "Disable" : "Enable" : "Read Only"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            {filteredMcpServers.length === 0 ? (
+              <p className="empty-copy">{mcpQuery ? "No connections match that filter." : "No MCP servers configured for this view yet."}</p>
+            ) : null}
+          </div>
+          {mcpDoctor ? (
+            <div className="connection-doctor">
+              <strong>Last doctor</strong>
+              <span>{mcpDoctor.summary.passed} ok · {mcpDoctor.summary.failed} failed · {mcpDoctor.summary.skipped} skipped</span>
+            </div>
+          ) : null}
+        </section>
 
         <section className="panel brains-panel">
           <div className="panel-title">

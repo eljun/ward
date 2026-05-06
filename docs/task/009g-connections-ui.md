@@ -1,6 +1,6 @@
 # Task 009G: Settings Connections UI
 
-- Status: `planned`
+- Status: `testing`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `medium`
@@ -85,3 +85,52 @@ secret values out of the browser.
 - browser smoke of Settings -> Connections
 - manual check that `secret://` references remain references/redacted
 
+## Implementation Notes
+
+### What Changed
+
+- Added a Settings Connections panel that fits the current glassy WARD
+  command center style.
+- Added Effective, Global, Workspace, and Repo MCP scope views.
+- Added Connections summary metrics for enabled servers, healthy statuses,
+  discovered tools, and conflicts.
+- Added MCP search/filter across server id, scope, origin, transport, status,
+  tool scopes, capability profiles, and discovered tool names.
+- Rendered each server with enabled state, doctor/status badge, transport
+  summary, origin path, scopes, capability profiles, tool count, tool preview,
+  conflict warning, and error detail.
+- Added safe enable/disable controls for global/workspace servers while repo
+  rows remain read-only.
+- Added Refresh and Doctor actions that use the existing 009A/009C MCP
+  runtime APIs.
+- Avoided displaying env/header values or raw args in the UI; command
+  summaries show command plus arg count, and URL summaries strip query
+  strings.
+
+### Files Changed
+
+- `apps/ui/src/main.tsx` - MCP types, Connections state/fetchers, scope tabs,
+  server list, search, doctor action, and enable/disable controls.
+- `apps/ui/src/styles.css` - responsive Connections layout and row styles.
+- `docs/task/009-mcp-connections.md` and `TASKS.md` - slice tracking.
+
+### Deviations From Plan
+
+- No runtime route was needed; existing MCP effective, scoped config, server
+  status, doctor, and patch routes were sufficient.
+- Browser/runtime smoke could not run in this sandbox because loopback port
+  binding is unavailable during this run; `isPortAvailable` returned false
+  for the WARD range and high test ports. The direct fixture MCP config smoke
+  verified the underlying data returned to the UI.
+
+### Verification Run
+
+- `bun run typecheck` - PASS
+- `bun run build` - PASS
+- `git diff --check` - PASS
+- `bun test` - SKIPPED (repo has no test files yet; Bun exits 1)
+- `WARD_HOME=/tmp/ward-task009g-smoke WARD_SECRET_BACKEND=file bun run ward --json init` - PASS
+- Direct memory workspace seed in `/tmp/ward-task009g-smoke` - PASS
+- Direct fixture MCP server config with `secret://fixture-token` - PASS
+- Direct effective/scoped config + `runMcpDoctor` smoke - PASS
+- Runtime/browser smoke - SKIPPED (sandbox cannot bind loopback ports)

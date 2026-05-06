@@ -2,10 +2,6 @@
 
 ## Planned
 
-- [ ] `9G` Settings Connections UI
-  - Doc: [docs/task/009g-connections-ui.md](docs/task/009g-connections-ui.md)
-  - Goal: Add Settings -> Connections for scoped/effective MCP config, conflicts, server status, tool counts, and safe enable/disable.
-
 - [ ] `10` Inbound Remote Messaging
   - Doc: [docs/task/010-inbound-remote-messaging.md](docs/task/010-inbound-remote-messaging.md)
   - Goal: Slack Socket Mode + Telegram long-poll; signature verification; sender/command allowlist; Intervention round-trip; presence-aware routing; audit log.
@@ -23,9 +19,19 @@
 - [ ] `9` MCP Connections Layer
   - Doc: [docs/task/009-mcp-connections.md](docs/task/009-mcp-connections.md)
   - Goal: Three-scope MCP registry (global / workspace / repo, reuses `.mcp.json`); secrets via OS keychain; tool routing; autonomy-class policy; WARD-as-MCP-server.
-  - Current slice: 009F WARD as a read-only MCP server.
+  - Current slice: 009G Settings Connections UI.
 
 ## Testing
+
+- [ ] `9G` Settings Connections UI
+  - Doc: [docs/task/009g-connections-ui.md](docs/task/009g-connections-ui.md)
+  - Goal: Add Settings -> Connections for scoped/effective MCP config, conflicts, server status, tool counts, and safe enable/disable.
+
+- Task 009G Settings includes a Connections panel with Effective, Global, Workspace, and Repo views.
+- Task 009G Connections filters configured MCP servers by id, scope, status, profile, and tool names.
+- Task 009G Connections shows effective conflicts, origin paths, enabled state, transport summary, tool scopes, capability profiles, status, and tool counts.
+- Task 009G Global and Workspace rows can toggle editable MCP servers while Repo rows stay read-only.
+- Task 009G direct fixture MCP config smoke verifies effective config, scoped config, doctor status, tool count, and redacted `secret://` references.
 
 - [ ] `9F` WARD as a Read-Only MCP Server
   - Doc: [docs/task/009f-ward-mcp-server.md](docs/task/009f-ward-mcp-server.md)

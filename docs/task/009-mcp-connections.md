@@ -269,3 +269,15 @@ for harness worker status updates. The slice adds a smoke client with
 `ward mcp smoke-serve` and keeps mutation tools out of the advertised tool
 list. Mutation tools, network transport, OAuth, and UI client setup remain
 deferred.
+
+### Settings Connections UI Slice
+
+[009G Settings Connections UI](009g-connections-ui.md) adds the first
+operator-facing MCP inspection surface inside Settings. The panel shows
+Effective, Global, Workspace, and Repo views with search, summary metrics,
+origin paths, redacted transport summaries, tool scopes, capability profiles,
+doctor/status badges, tool counts, conflict warnings, and safe enable/disable
+controls for editable global/workspace servers. Repo scope remains read-only.
+The UI intentionally avoids auth marketplaces, secret editing, approval
+flows, and live log streaming; those stay deferred until the core connection
+layer is stable.
