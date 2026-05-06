@@ -2,9 +2,9 @@
 
 ## Planned
 
-- [ ] `16` Agentic Orb Conductor
-  - Doc: [docs/task/016-agentic-orb-conductor.md](docs/task/016-agentic-orb-conductor.md)
-  - Goal: Add an action layer on top of the orb chat. The orb classifies messages as chat vs. conductor, plans multi-step actions in a typed JSON schema (`create_task`, `launch_session`, etc.), confirms inline before executing, runs steps through internal handlers, streams `step_started` / `step_completed` SSE events into the transcript, and watches the launched session's lifecycle in-thread until it reaches a terminal state. Reuses task 015's glass aesthetic for the inline confirmation row. Builds on 014 (orb chat stream), 015 (UI shell, palette, inline patterns), and benefits from 017 (configurable chat prompt) — though 017 is recommended, not strictly required.
+- [ ] `18` Fluid Plasma Orb Shader
+  - Doc: [docs/task/018-fluid-plasma-orb-shader.md](docs/task/018-fluid-plasma-orb-shader.md)
+  - Goal: Replace the current mesh-and-rings orb with a custom GLSL shader that produces a fluid, atmospheric plasma energy ball comparable to BoltAI's. Vertex displacement with simplex noise, fbm-driven internal currents, Fresnel rim glow, UnrealBloomPass post-processing, four named palettes (Plasma / Aurora / Ember / Quantum), and a Settings dropdown to switch them. Reuses 015's `intensity`, `palette`, and `pulseKey` props plus the `ward:speech` event bus — no call-site changes elsewhere. FPS sampler with a low-fidelity fallback for integrated GPUs. 60 fps on M-series Macs.
 
 - [ ] `10` Inbound Remote Messaging
   - Doc: [docs/task/010-inbound-remote-messaging.md](docs/task/010-inbound-remote-messaging.md)
@@ -20,11 +20,15 @@
 
 ## In Progress
 
+## Testing
+
+- [ ] `16` Agentic Orb Conductor
+  - Doc: [docs/task/016-agentic-orb-conductor.md](docs/task/016-agentic-orb-conductor.md)
+  - Goal: Add an action layer on top of the orb chat. The orb classifies messages as chat vs. conductor, plans multi-step actions in a typed JSON schema (`create_task`, `launch_session`, etc.), confirms inline before executing, runs steps through internal handlers, streams `step_started` / `step_completed` SSE events into the transcript, and watches the launched session's lifecycle in-thread until it reaches a terminal state. Reuses task 015's glass aesthetic for the inline confirmation row. Builds on 014 (orb chat stream), 015 (UI shell, palette, inline patterns), and benefits from 017 (configurable chat prompt) — though 017 is recommended, not strictly required.
+
 - [ ] `17` Richer + Configurable Orb Context
   - Doc: [docs/task/017-configurable-orb-context.md](docs/task/017-configurable-orb-context.md)
   - Goal: Stop generic orb replies by including specific state (active workspace name, top open tasks, recent sessions, today's date) in the system prompt, AND expose a Settings card where the user can override the system prompt, toggle which categories are injected, and budget the total token cost. Builds on 014 and 015.
-
-## Testing
 
 - [ ] `15` Dark Agent-First UI Shell with Live Updates
   - Doc: [docs/task/015-dark-agent-first-ui-shell.md](docs/task/015-dark-agent-first-ui-shell.md)
