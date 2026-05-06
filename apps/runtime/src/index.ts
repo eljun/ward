@@ -1,6 +1,7 @@
-import { existsSync } from "node:fs";
-import { unlink } from "node:fs/promises";
-import { extname, join, normalize } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { readdir, unlink } from "node:fs/promises";
+import { homedir } from "node:os";
+import { extname, isAbsolute, join, normalize, resolve as resolvePath, dirname } from "node:path";
 import {
   AddArtifactSchema,
   AppendWikiPageSchema,
@@ -781,6 +782,43 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
       const scope = McpEditableScopeSchema.parse(parts[2]);
       const body = req.headers.get("content-length") === "0" ? {} : await readJson(req).catch(() => ({}));
       return json({ ok: true, server: await deleteMcpServer(parts[4], McpDeleteServerSchema.parse({ ...(body as Record<string, unknown>), scope })) });
+    }
+
+    if (parts[0] === "fs" && parts[1] === "list" && req.method === "GET") {
+      const requested = url.searchParams.get("path");
+      const target = requested && requested.length > 0 ? requested : homedir();
+      const absolute = isAbsolute(target) ? resolvePath(target) : resolvePath(homedir(), target);
+      if (!existsSync(absolute)) {
+        return json({ ok: false, error: `Path does not exist: ${absolute}` }, 404);
+      }
+      let stat: ReturnType<typeof statSync>;
+      try {
+        stat = statSync(absolute);
+      } catch (err) {
+        return json({ ok: false, error: (err as Error).message }, 400);
+      }
+      if (!stat.isDirectory()) {
+        return json({ ok: false, error: `Not a directory: ${absolute}` }, 400);
+      }
+      let dirents;
+      try {
+        dirents = await readdir(absolute, { withFileTypes: true });
+      } catch (err) {
+        return json({ ok: false, error: (err as Error).message }, 400);
+      }
+      const entries = dirents
+        .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+        .map((d) => ({ name: d.name, abs_path: join(absolute, d.name) }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .slice(0, 500);
+      const parent = dirname(absolute);
+      return json({
+        ok: true,
+        path: absolute,
+        parent: parent === absolute ? null : parent,
+        home: homedir(),
+        entries
+      });
     }
 
     if (parts[0] === "overview" && req.method === "GET") {

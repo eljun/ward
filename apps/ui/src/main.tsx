@@ -1,6 +1,8 @@
 import React, { FormEvent, useEffect, useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { createRoot } from "react-dom/client";
-import { Boxes, BrainCircuit, Database, LayoutDashboard, Menu, Mic, PanelRight, RefreshCw, Send, Settings, Sparkles, Waypoints, X } from "lucide-react";
+import { Boxes, BrainCircuit, ChevronDown, ChevronUp, Database, LayoutDashboard, Menu, Mic, PanelRight, RefreshCw, Send, Settings, Sparkles, Terminal as TerminalIcon, Waypoints, X } from "lucide-react";
 import { WardOrb } from "./components/WardOrb";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
@@ -616,6 +618,26 @@ function formatDollars(value: number): string {
   return value > 0 ? `$${value.toFixed(4)}` : "$0";
 }
 
+const ANSI_ESCAPE_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*\x07)/g;
+
+function stripAnsi(value: string): string {
+  return value.replace(ANSI_ESCAPE_RE, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+const WARD_STATUS_RE = /<<\s*WARD_STATUS[^>]*>>/g;
+
+function cleanAgentMarkdown(value: string): string {
+  return value.replace(WARD_STATUS_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function MarkdownMessage({ text }: { text: string }): React.JSX.Element {
+  return (
+    <div className="md-body">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanAgentMarkdown(text)}</ReactMarkdown>
+    </div>
+  );
+}
+
 function formatMetric(value: number, metric: string): string {
   if (metric === "duration_ms") {
     return formatDuration(value);
@@ -907,6 +929,24 @@ function App() {
   const [activeView, setActiveView] = useState<CommandView>("overview");
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [repoPath, setRepoPath] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerPath, setPickerPath] = useState("");
+  const [pickerParent, setPickerParent] = useState<string | null>(null);
+  const [pickerEntries, setPickerEntries] = useState<Array<{ name: string; abs_path: string }>>([]);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerError, setPickerError] = useState("");
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const [taskBusy, setTaskBusy] = useState(false);
+  const [attachBusy, setAttachBusy] = useState(false);
+  const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false);
+  const [sessionLaunchOpen, setSessionLaunchOpen] = useState(false);
+  const [launchGoal, setLaunchGoal] = useState("");
+  const [launchTaskId, setLaunchTaskId] = useState("");
+  const [terminalDockOpen, setTerminalDockOpen] = useState(false);
+  const [terminalTabs, setTerminalTabs] = useState<string[]>([]);
+  const [terminalActiveTab, setTerminalActiveTab] = useState<string>("");
+  const [terminalDetails, setTerminalDetails] = useState<Record<string, HarnessSessionDetail>>({});
   const [commandMenuOpen, setCommandMenuOpen] = useState(false);
   const [orbPulse, setOrbPulse] = useState(0);
   const [chatText, setChatText] = useState("");
@@ -1232,6 +1272,13 @@ function App() {
   }, [memoryScope]);
 
   useEffect(() => {
+    if (!sessionDetail) return;
+    const sid = sessionDetail.session.id;
+    if (!terminalTabs.includes(sid)) return;
+    setTerminalDetails((prev) => ({ ...prev, [sid]: sessionDetail }));
+  }, [sessionDetail, terminalTabs]);
+
+  useEffect(() => {
     if (!selectedSessionId) {
       return;
     }
@@ -1262,8 +1309,19 @@ function App() {
         if (!current || current.session.id !== selectedSessionId || current.events.some((item) => item.event_id === parsed.event_id)) {
           return current;
         }
+        let nextSession = current.session;
+        if (parsed.event_type === "session.state_changed") {
+          const payload = parsed.payload as { to_state?: string };
+          if (payload?.to_state) {
+            nextSession = { ...current.session, lifecycle_state: payload.to_state };
+          }
+        }
+        if (parsed.event_type === "worker.exit") {
+          nextSession = { ...nextSession, worker_pid: null };
+        }
         return {
           ...current,
+          session: nextSession,
           events: [...current.events, parsed],
           pty_output: parsed.event_type === "worker.terminal" && typeof (parsed.payload as { data?: unknown }).data === "string"
             ? `${current.pty_output}${(parsed.payload as { data: string }).data}`
@@ -1390,54 +1448,112 @@ function App() {
 
   async function createWorkspace(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    await api("/api/workspaces", {
-      method: "POST",
-      body: JSON.stringify({
-        name: String(form.get("name") ?? ""),
-        description: String(form.get("description") ?? ""),
-        repo: String(form.get("repo") ?? "") || undefined
-      })
-    });
-    event.currentTarget.reset();
-    setMessage("Workspace created.");
-    await refresh();
+    if (workspaceBusy) return;
+    const formEl = event.currentTarget;
+    const form = new FormData(formEl);
+    setError("");
+    setMessage("");
+    setWorkspaceBusy(true);
+    try {
+      const name = String(form.get("name") ?? "").trim();
+      const created = await api<{ workspace: Workspace }>("/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          description: String(form.get("description") ?? ""),
+          repo: repoPath.trim() || undefined
+        })
+      });
+      formEl.reset();
+      setRepoPath("");
+      setMessage(`Workspace "${created.workspace.name}" created.`);
+      await refresh();
+      setSelectedSlug(created.workspace.slug);
+      setNewWorkspaceOpen(false);
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
+  async function loadPickerPath(target: string): Promise<void> {
+    setPickerLoading(true);
+    setPickerError("");
+    try {
+      const params = new URLSearchParams();
+      if (target) params.set("path", target);
+      const response = await api<{ path: string; parent: string | null; entries: Array<{ name: string; abs_path: string }> }>(`/api/fs/list?${params.toString()}`);
+      setPickerPath(response.path);
+      setPickerParent(response.parent);
+      setPickerEntries(response.entries);
+    } catch (err) {
+      setPickerError((err as Error).message);
+    } finally {
+      setPickerLoading(false);
+    }
+  }
+
+  function openFolderPicker(): void {
+    setPickerOpen(true);
+    const start = repoPath.trim() || "";
+    loadPickerPath(start).catch((err) => setPickerError((err as Error).message));
+  }
+
+  function selectFolderFromPicker(path: string): void {
+    setRepoPath(path);
+    setPickerOpen(false);
   }
 
   async function createTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedWorkspace) {
+    if (!selectedWorkspace || taskBusy) {
       return;
     }
-    const form = new FormData(event.currentTarget);
-    await api("/api/tasks", {
-      method: "POST",
-      body: JSON.stringify({
-        workspace_slug: selectedWorkspace.slug,
-        title: String(form.get("title") ?? ""),
-        priority: String(form.get("priority") ?? "medium"),
-        type: String(form.get("type") ?? "feature")
-      })
-    });
-    event.currentTarget.reset();
-    setMessage("Task created.");
-    await refresh();
-    await refreshDetail(selectedWorkspace.slug);
+    const formEl = event.currentTarget;
+    const form = new FormData(formEl);
+    setError("");
+    setMessage("");
+    setTaskBusy(true);
+    try {
+      const title = String(form.get("title") ?? "").trim();
+      await api("/api/tasks", {
+        method: "POST",
+        body: JSON.stringify({
+          workspace_slug: selectedWorkspace.slug,
+          title,
+          priority: String(form.get("priority") ?? "medium"),
+          type: String(form.get("type") ?? "feature")
+        })
+      });
+      formEl.reset();
+      setMessage(`Task "${title}" added.`);
+      await refresh();
+      await refreshDetail(selectedWorkspace.slug);
+    } finally {
+      setTaskBusy(false);
+    }
   }
 
   async function uploadAttachment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedWorkspace) {
+    if (!selectedWorkspace || attachBusy) {
       return;
     }
-    const form = new FormData(event.currentTarget);
-    await api(`/api/workspaces/${selectedWorkspace.slug}/attachments`, {
-      method: "POST",
-      body: form
-    });
-    event.currentTarget.reset();
-    setMessage("Attachment ingested.");
-    await refreshDetail(selectedWorkspace.slug);
+    const formEl = event.currentTarget;
+    const form = new FormData(formEl);
+    setError("");
+    setMessage("");
+    setAttachBusy(true);
+    try {
+      await api(`/api/workspaces/${selectedWorkspace.slug}/attachments`, {
+        method: "POST",
+        body: form
+      });
+      formEl.reset();
+      setMessage("Attachment ingested.");
+      await refreshDetail(selectedWorkspace.slug);
+    } finally {
+      setAttachBusy(false);
+    }
   }
 
   function activePlanRef(): string {
@@ -1625,6 +1741,11 @@ function App() {
     const taskId = String(form.get("task_id") ?? "");
     const scenario = String(form.get("scenario") ?? "default");
     const brainId = String(form.get("brain_id") ?? "stub-worker");
+    let goal = String(form.get("goal") ?? "").trim();
+    if (!goal && taskId) {
+      const linkedTask = detail?.tasks.find((task) => task.id === taskId);
+      if (linkedTask) goal = linkedTask.title;
+    }
     try {
       const response = await api<{ detail: HarnessSessionDetail }>("/api/sessions", {
         method: "POST",
@@ -1634,7 +1755,7 @@ function App() {
           brain_id: brainId,
           mode: String(form.get("mode") ?? "headless"),
           scenario,
-          goal: String(form.get("goal") ?? "") || undefined,
+          goal: goal || undefined,
           idle_max_ms: scenario === "idle-timeout" ? 200 : undefined
         })
       });
@@ -1642,10 +1763,39 @@ function App() {
       setSelectedSessionId(nextId);
       setSessionDetail(response.detail);
       setMessage("Harness session launched.");
+      setSessionLaunchOpen(false);
+      openSessionInTerminal(nextId, response.detail);
       await refreshSessionSurface(selectedWorkspace.slug, nextId);
     } finally {
       setSessionBusy("");
     }
+  }
+
+  function openSessionInTerminal(sessionId: string, detail?: HarnessSessionDetail) {
+    setTerminalTabs((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
+    setTerminalActiveTab(sessionId);
+    setTerminalDockOpen(true);
+    if (detail) {
+      setTerminalDetails((prev) => ({ ...prev, [sessionId]: detail }));
+    }
+  }
+
+  function closeTerminalTab(sessionId: string) {
+    setTerminalTabs((prev) => {
+      const next = prev.filter((id) => id !== sessionId);
+      if (terminalActiveTab === sessionId) {
+        setTerminalActiveTab(next[next.length - 1] ?? "");
+      }
+      if (next.length === 0) {
+        setTerminalDockOpen(false);
+      }
+      return next;
+    });
+    setTerminalDetails((prev) => {
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
   }
 
   async function cancelSession() {
@@ -1684,17 +1834,15 @@ function App() {
     }
   }
 
-  async function sendTerminalInput() {
-    if (!sessionDetail || !terminalInput.trim()) {
-      return;
-    }
+  async function sendTerminalRaw(targetSessionId: string, payload: string) {
+    if (!targetSessionId || !payload) return;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(`${protocol}//${window.location.host}/api/sessions/${encodeURIComponent(sessionDetail.session.id)}/pty`);
+    const socket = new WebSocket(`${protocol}//${window.location.host}/api/sessions/${encodeURIComponent(targetSessionId)}/pty`);
     await new Promise<void>((resolvePromise, reject) => {
       const timer = window.setTimeout(() => reject(new Error("Terminal attach timed out.")), 5000);
       socket.onopen = () => {
         window.clearTimeout(timer);
-        socket.send(`${terminalInput}\n`);
+        socket.send(payload);
         window.setTimeout(() => {
           socket.close();
           resolvePromise();
@@ -1702,8 +1850,33 @@ function App() {
       };
       socket.onerror = () => reject(new Error("Terminal attach failed."));
     });
+    await readSession(targetSessionId);
+  }
+
+  async function sendTerminalInput() {
+    const target = terminalActiveTab || sessionDetail?.session.id;
+    if (!target || !terminalInput.trim()) return;
+    await sendTerminalRaw(target, `${terminalInput}\n`);
     setTerminalInput("");
-    await readSession(sessionDetail.session.id);
+  }
+
+  async function sendTerminalKey(label: string) {
+    const target = terminalActiveTab || sessionDetail?.session.id;
+    if (!target) return;
+    const map: Record<string, string> = {
+      "1": "1\n",
+      "2": "2\n",
+      "3": "3\n",
+      y: "y\n",
+      n: "n\n",
+      enter: "\n",
+      esc: "\x1b",
+      up: "\x1b[A",
+      down: "\x1b[B"
+    };
+    const payload = map[label];
+    if (!payload) return;
+    await sendTerminalRaw(target, payload);
   }
 
   async function saveWikiPage() {
@@ -1937,14 +2110,14 @@ function App() {
             </div>
           </div>
           <div className="actions">
-            <button type="button" disabled={!overview} onClick={() => overview && speak(overview.brief.narration, overview.profile)}>
-              Speak
+            <button type="button" disabled={!overview} title="Read today's brief aloud" onClick={() => overview && speak(overview.brief.narration, overview.profile)}>
+              Speak brief
             </button>
-            <button type="button" disabled={!overview} onClick={() => overview && speak("WARD notification test.", overview.profile)}>
-              Test
+            <button type="button" disabled={!overview} title="Play a short voice test" onClick={() => overview && speak("WARD notification test.", overview.profile)}>
+              Test voice
             </button>
-            <button type="button" onClick={() => warmNow().catch((err) => setError(err.message))}>
-              Warm
+            <button type="button" title="Refresh the warm-start cache" onClick={() => warmNow().catch((err) => setError(err.message))}>
+              Refresh cache
             </button>
           </div>
         </section>
@@ -2316,87 +2489,104 @@ function App() {
         </section>
       </section> : null}
 
-      {activeView === "workspaces" ? <section className="workspace-grid">
-        <section className="panel">
-          <div className="panel-title">
-            <h2>Workspaces</h2>
-            <span>{workspaces.length}</span>
-          </div>
-          <form className="stack" onSubmit={createWorkspace}>
-            <input name="name" placeholder="Workspace name" required />
-            <input name="description" placeholder="Description" />
-            <input name="repo" placeholder="/path/to/repo" />
-            <button type="submit">Create</button>
-          </form>
-          <div className="list">
-            {workspaces.map((workspace) => (
-              <button
-                className={workspace.slug === selectedSlug ? "item active" : "item"}
-                key={workspace.id}
-                type="button"
-                onClick={() => setSelectedSlug(workspace.slug)}
-              >
-                <strong>{workspace.name}</strong>
-                <span>{workspace.slug} · {workspace.autonomy_level}</span>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel">
-          <div className="panel-title">
-            <h2>Tasks</h2>
-            <span>{detail?.tasks.length ?? tasks.length}</span>
-          </div>
-          <form className="task-form" onSubmit={createTask}>
-            <input name="title" placeholder="Task title" required disabled={!selectedWorkspace} />
-            <select name="type" disabled={!selectedWorkspace}>
-              <option value="feature">Feature</option>
-              <option value="bug">Bug</option>
-              <option value="chore">Chore</option>
-              <option value="research">Research</option>
+      {activeView === "workspaces" ? <section className="workspaces-view">
+        <div className="workspace-bar">
+          <label className="workspace-selector">
+            <span>Workspace</span>
+            <select
+              value={selectedSlug}
+              onChange={(event) => setSelectedSlug(event.target.value)}
+              disabled={workspaces.length === 0}
+            >
+              {workspaces.length === 0 ? (
+                <option value="">No workspaces yet</option>
+              ) : (
+                <>
+                  <option value="">— select a workspace —</option>
+                  {workspaces.map((workspace) => (
+                    <option key={workspace.id} value={workspace.slug}>{workspace.name}</option>
+                  ))}
+                </>
+              )}
             </select>
-            <select name="priority" disabled={!selectedWorkspace}>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-              <option value="urgent">Urgent</option>
-              <option value="low">Low</option>
-            </select>
-            <button type="submit" disabled={!selectedWorkspace}>Add</button>
-          </form>
-          <div className="table">
-            {(detail?.tasks ?? tasks).map((task) => (
-              <div className="table-row" key={task.id}>
-                <strong>{task.title}</strong>
-                <span>{task.status}</span>
-                <span>{task.lifecycle_phase}</span>
-                <span>{task.priority}</span>
-              </div>
-            ))}
-          </div>
-        </section>
+          </label>
+          <button type="button" onClick={() => { setError(""); setMessage(""); setNewWorkspaceOpen(true); }}>+ New workspace</button>
+        </div>
 
-        <section className="panel">
-          <div className="panel-title">
-            <h2>Attachments</h2>
-            <span>{detail?.attachments.length ?? 0}</span>
+        {workspaces.length === 0 ? (
+          <div className="welcome-card">
+            <h2>No workspaces yet</h2>
+            <p>A workspace links WARD to a project folder on disk. Create one to start tracking tasks, attachments, and sessions.</p>
+            <button type="button" onClick={() => setNewWorkspaceOpen(true)}>Create your first workspace</button>
           </div>
-          <form className="stack" onSubmit={uploadAttachment}>
-            <input name="file" type="file" accept=".md,.markdown,.txt,.text,.pdf,text/plain,text/markdown,application/pdf" disabled={!selectedWorkspace} required />
-            <button type="submit" disabled={!selectedWorkspace}>Attach</button>
-          </form>
-          <div className="list compact">
-            {detail?.attachments.map((attachment) => (
-              <div className="item static" key={attachment.id}>
-                <strong>{attachment.name}</strong>
-                <span>{attachment.kind} · {attachment.bytes} bytes</span>
+        ) : !selectedWorkspace ? (
+          <div className="welcome-card subtle">
+            <p>Pick a workspace from the dropdown above to see its tasks and attachments.</p>
+          </div>
+        ) : (
+          <div className="workspace-content">
+            <section className="panel">
+              <div className="panel-title">
+                <h2>Tasks</h2>
+                <span>{detail?.tasks.length ?? tasks.length}</span>
               </div>
-            ))}
+              <form className="task-form" onSubmit={(event) => createTask(event).catch((err) => setError(err.message))}>
+                <input name="title" placeholder="Task title" required disabled={taskBusy} />
+                <select name="type" disabled={taskBusy}>
+                  <option value="feature">Feature</option>
+                  <option value="bug">Bug</option>
+                  <option value="chore">Chore</option>
+                  <option value="research">Research</option>
+                </select>
+                <select name="priority" disabled={taskBusy}>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="urgent">Urgent</option>
+                  <option value="low">Low</option>
+                </select>
+                <button type="submit" disabled={taskBusy}>{taskBusy ? "Adding…" : "Add"}</button>
+              </form>
+              <div className="table">
+                {(detail?.tasks ?? tasks).length === 0 ? (
+                  <p className="empty-copy">No tasks yet for {selectedWorkspace.name}. Add one above to assign work.</p>
+                ) : null}
+                {(detail?.tasks ?? tasks).map((task) => (
+                  <div className="table-row" key={task.id}>
+                    <strong>{task.title}</strong>
+                    <span>{task.status}</span>
+                    <span>{task.lifecycle_phase}</span>
+                    <span>{task.priority}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="panel-title">
+                <h2>Attachments</h2>
+                <span>{detail?.attachments.length ?? 0}</span>
+              </div>
+              <form className="stack" onSubmit={(event) => uploadAttachment(event).catch((err) => setError(err.message))}>
+                <input name="file" type="file" accept=".md,.markdown,.txt,.text,.pdf,text/plain,text/markdown,application/pdf" required disabled={attachBusy} />
+                <button type="submit" disabled={attachBusy}>{attachBusy ? "Uploading…" : "Attach"}</button>
+              </form>
+              <div className="list compact">
+                {(detail?.attachments?.length ?? 0) === 0 ? (
+                  <p className="empty-copy">No attachments yet. Markdown, text, or PDF files attach as workspace context.</p>
+                ) : null}
+                {detail?.attachments.map((attachment) => (
+                  <div className="item static" key={attachment.id}>
+                    <strong>{attachment.name}</strong>
+                    <span>{attachment.kind} · {attachment.bytes} bytes</span>
+                  </div>
+                ))}
+              </div>
+            </section>
           </div>
-        </section>
+        )}
       </section> : null}
 
-      {activeView === "planning" ? <section className="plan-grid">
+      {activeView === "planning" ? <section className={planDetail ? "plan-grid" : "plan-grid empty"}>
         <section className="panel plan-sidebar">
           <div className="panel-title">
             <h2>Plan Mode</h2>
@@ -2517,32 +2707,36 @@ function App() {
               </div>
             </div>
           )}
-          <div className="plan-actions">
-            <button type="button" disabled={!planIsDraft || planBusy !== ""} onClick={() => approvePlanPacket().catch((err) => setError(err.message))}>
-              {planBusy === "approve" ? "Approving..." : "Approve"}
-            </button>
-            <button type="button" disabled={!planIsApproved || planBusy !== ""} onClick={() => generatePlanTasks().catch((err) => setError(err.message))}>
-              {planBusy === "generate" ? "Generating..." : "Generate Tasks"}
-            </button>
-            <button type="button" disabled={!activePlanRef() || planBusy !== ""} onClick={() => readPlan(activePlanRef()).catch((err) => setError(err.message))}>
-              Reload
-            </button>
-          </div>
-          <form className="revision-form" onSubmit={(event) => revisePlanPacket(event).catch((err) => setError(err.message))}>
-            <input name="notes" placeholder="Revision notes" disabled={!planDetail?.packet || planBusy !== ""} />
-            <button type="submit" disabled={!planDetail?.packet || planBusy !== ""}>
-              {planBusy === "revise" ? "Revising..." : "Revise"}
-            </button>
-          </form>
+          {planDetail?.packet ? (
+            <>
+              <div className="plan-actions">
+                <button type="button" disabled={!planIsDraft || planBusy !== ""} onClick={() => approvePlanPacket().catch((err) => setError(err.message))}>
+                  {planBusy === "approve" ? "Approving..." : "Approve"}
+                </button>
+                <button type="button" disabled={!planIsApproved || planBusy !== ""} onClick={() => generatePlanTasks().catch((err) => setError(err.message))}>
+                  {planBusy === "generate" ? "Generating..." : "Generate Tasks"}
+                </button>
+                <button type="button" disabled={!activePlanRef() || planBusy !== ""} onClick={() => readPlan(activePlanRef()).catch((err) => setError(err.message))}>
+                  Reload
+                </button>
+              </div>
+              <form className="revision-form" onSubmit={(event) => revisePlanPacket(event).catch((err) => setError(err.message))}>
+                <input name="notes" placeholder="Revision notes" disabled={planBusy !== ""} />
+                <button type="submit" disabled={planBusy !== ""}>
+                  {planBusy === "revise" ? "Revising..." : "Revise"}
+                </button>
+              </form>
+            </>
+          ) : null}
         </section>
 
-        <section className="panel plan-participants">
+        {latestRound?.participants_json.length ? <section className="panel plan-participants">
           <div className="panel-title">
             <h2>Participants</h2>
-            <span>{latestRound?.participants_json.length ?? 0}</span>
+            <span>{latestRound.participants_json.length}</span>
           </div>
           <div className="list compact">
-            {latestRound?.participants_json.map((output) => (
+            {latestRound.participants_json.map((output) => (
               <div className="item static" key={`${latestRound.id}-${output.participant_id}`}>
                 <strong>{output.participant_id}</strong>
                 <span>{participantMeta(output)}</span>
@@ -2550,173 +2744,145 @@ function App() {
               </div>
             ))}
           </div>
-        </section>
+        </section> : null}
       </section> : null}
 
-      {activeView === "sessions" ? <section className="session-grid">
-        <section className="panel session-sidebar">
-          <div className="panel-title">
-            <h2>Sessions</h2>
-            <span>{sessions.length}</span>
-          </div>
-          <form className="stack" onSubmit={(event) => launchSession(event).catch((err) => setError(err.message))}>
-            <input name="goal" placeholder="Session goal" disabled={!selectedWorkspace} />
-            <select name="task_id" disabled={!selectedWorkspace}>
-              <option value="">No task</option>
-              {detail?.tasks.map((task) => (
-                <option key={task.id} value={task.id}>{task.title}</option>
-              ))}
+      {activeView === "sessions" ? <section className="sessions-view">
+        <div className="workspace-bar">
+          <label className="workspace-selector">
+            <span>Session</span>
+            <select
+              value={selectedSessionId}
+              onChange={(event) => readSession(event.target.value).catch((err) => setError(err.message))}
+              disabled={sessions.length === 0}
+            >
+              {sessions.length === 0 ? (
+                <option value="">No sessions yet</option>
+              ) : (
+                <>
+                  <option value="">— select a session —</option>
+                  {sessions.map((session) => (
+                    <option key={session.id} value={session.id}>
+                      {(session.task_title ?? session.brain_id ?? session.id)} · {stateLabel(session.lifecycle_state)}
+                    </option>
+                  ))}
+                </>
+              )}
             </select>
-            <select name="brain_id" defaultValue="stub-worker" disabled={!selectedWorkspace || enabledBrains.length === 0}>
-              {enabledBrains.length === 0 ? <option value="">No brains enabled</option> : null}
-              {enabledBrains.map((brain) => (
-                <option key={brain.id} value={brain.id}>
-                  {brainDisplayName(brain)} · {runtimeLabel(brain.runtime)} · {accountingLabel(brain.accounting)}
-                </option>
-              ))}
-            </select>
-            <div className="session-controls">
-              <select name="mode" defaultValue="headless" disabled={!selectedWorkspace}>
-                <option value="headless">Headless</option>
-                <option value="visible">Visible</option>
-              </select>
-              <select name="scenario" defaultValue="default" disabled={!selectedWorkspace}>
-                <option value="default">Normal run</option>
-                <option value="fails">Stub failure</option>
-                <option value="await-approval">Approval wait</option>
-                <option value="tool-denied">Tool denied</option>
-                <option value="idle-timeout">Idle watchdog</option>
-                <option value="visible-echo">Visible echo</option>
-                <option value="qa-missing-evidence">QA missing evidence</option>
-                <option value="file-write">File write</option>
-                <option value="throughput">Throughput</option>
-                <option value="long-running">Long running</option>
-              </select>
-            </div>
-            <button type="submit" disabled={!selectedWorkspace || enabledBrains.length === 0 || sessionBusy !== ""}>
-              {sessionBusy === "launch" ? "Launching..." : "Launch Session"}
-            </button>
-          </form>
-          <div className="brain-registry">
-            {enabledBrains.map((brain) => (
-              <div className="brain-card" key={brain.id}>
-                <strong>{brainDisplayName(brain)}</strong>
-                <span>{brainSummary(brain)}</span>
-              </div>
-            ))}
+          </label>
+          <button
+            type="button"
+            disabled={!selectedWorkspace || enabledBrains.length === 0}
+            onClick={() => {
+              setError("");
+              setMessage("");
+              setLaunchTaskId("");
+              setLaunchGoal("");
+              setSessionLaunchOpen(true);
+            }}
+          >
+            + Launch session
+          </button>
+        </div>
+
+        {!selectedWorkspace ? (
+          <div className="welcome-card">
+            <h2>Select a workspace first</h2>
+            <p>Sessions run against a workspace. Open the Workspaces view, pick one, then come back here to launch a session.</p>
           </div>
-          <div className="list compact">
-            {sessions.map((session) => (
-              <button
-                className={session.id === selectedSessionId ? "item session-card active" : "item session-card"}
-                key={session.id}
-                type="button"
-                onClick={() => readSession(session.id).catch((err) => setError(err.message))}
-              >
-                <div className="session-row">
-                  <strong>{session.task_title ?? session.brain_id ?? session.id}</strong>
-                  <Badge tone={stateBadgeTone(session.lifecycle_state)}>{stateLabel(session.lifecycle_state)}</Badge>
+        ) : sessions.length === 0 ? (
+          <div className="welcome-card">
+            <h2>No sessions yet</h2>
+            <p>Launch a harness session to run a brain on this workspace. Stub-worker is the safest first run — instant, offline, no token cost.</p>
+            <button type="button" onClick={() => {
+              setLaunchTaskId("");
+              setLaunchGoal("");
+              setSessionLaunchOpen(true);
+            }}>Launch your first session</button>
+          </div>
+        ) : !sessionDetail ? (
+          <div className="welcome-card subtle">
+            <p>Pick a session from the dropdown above to see its progress, events, and terminal output.</p>
+          </div>
+        ) : (
+          <div className="session-detail-stack">
+            <section className="panel">
+              <div className="session-header">
+                <div>
+                  <h2>{sessionDetail.session.task_title ?? sessionDetail.session.id}</h2>
+                  <p className="hint">
+                    {brainDisplayName(selectedSessionBrain, selectedSession?.brain_id)} · {runtimeLabel(selectedSession?.runtime_kind)} · {selectedSession?.mode ?? "headless"}
+                    {selectedSession?.scenario && selectedSession.scenario !== "default" ? ` · ${titleCase(selectedSession.scenario)}` : ""}
+                  </p>
                 </div>
-                <span>{session.brain_id ?? "brain pending"} · {runtimeLabel(session.runtime_kind)} · {session.mode ?? "headless"}</span>
-                <small>{session.queue_state ?? "queue"}{session.queue_position ? ` #${session.queue_position}` : ""}</small>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel session-detail">
-          <div className="panel-title">
-            <h2>{sessionDetail?.session.task_title ?? "Session Detail"}</h2>
-            <Badge tone={stateBadgeTone(sessionDetail?.session.lifecycle_state)}>{stateLabel(sessionDetail?.session.lifecycle_state)}</Badge>
-          </div>
-          <div className="session-metrics">
-            <div>
-              <strong>{sessionDetail?.events.length ?? 0}</strong>
-              <span>events</span>
-            </div>
-            <div>
-              <strong>{sessionDetail?.artifacts.length ?? 0}</strong>
-              <span>artifacts</span>
-            </div>
-            <div>
-              <strong>{sessionDetail?.session.worker_pid ?? "-"}</strong>
-              <span>worker</span>
-            </div>
-            <div>
-              <strong>{sessionDetail?.session.mode ?? "-"}</strong>
-              <span>mode</span>
-            </div>
-          </div>
-          <div className="session-status-strip">
-            <div>
-              <span>Brain</span>
-              <strong>{brainDisplayName(selectedSessionBrain, selectedSession?.brain_id)}</strong>
-              <small>{brainSummary(selectedSessionBrain, selectedSession?.brain_id)}</small>
-            </div>
-            <div>
-              <span>Runtime</span>
-              <strong>{runtimeLabel(selectedSession?.runtime_kind)}</strong>
-              <small>{selectedSession?.scenario ? titleCase(selectedSession.scenario) : "No scenario"}</small>
-            </div>
-            <div>
-              <span>Queue</span>
-              <strong>{selectedSession?.queue_state ?? "idle"}</strong>
-              <small>{selectedSession?.queue_position ? `position ${selectedSession.queue_position}` : "no wait"}</small>
-            </div>
-          </div>
-          {latestSessionIssue ? (
-            <div className={`session-banner ${stateTone(sessionDetail?.session.lifecycle_state)}`}>
-              <strong>{sessionDetail?.session.lifecycle_state === "blocked" ? "Blocked, not broken" : "Latest issue"}</strong>
-              <p>{eventSummary(latestSessionIssue)}</p>
-            </div>
-          ) : null}
-          <div className="moderator">
-            <strong>{sessionDetail ? sessionDetail.session.summary ?? brainDisplayName(selectedSessionBrain, selectedSession?.brain_id) : "No active session"}</strong>
-            <p>{sessionDetail?.session.working_dir ?? (selectedWorkspace ? "Launch a session for this workspace." : "Select a workspace first.")}</p>
-          </div>
-          {latestAssistantMessage ? (
-            <div className="moderator latest-message">
-              <strong>Latest Message</strong>
-              <p>{eventSummary(latestAssistantMessage)}</p>
-            </div>
-          ) : null}
-          {sessionDetail?.session.mode === "visible" ? (
-            <div className="terminal-pane">
-              <pre>{sessionDetail.pty_output || "Terminal output will appear here."}</pre>
-              <div className="session-controls">
-                <input value={terminalInput} onChange={(event) => setTerminalInput(event.target.value)} placeholder="Type terminal input" />
-                <button type="button" onClick={() => sendTerminalInput().catch((err) => setError(err.message))}>Send</button>
+                <Badge tone={stateBadgeTone(sessionDetail.session.lifecycle_state)}>{stateLabel(sessionDetail.session.lifecycle_state)}</Badge>
               </div>
-            </div>
-          ) : null}
-          <div className="session-actions">
-            <button type="button" disabled={!sessionDetail || sessionBusy !== ""} onClick={() => refreshSessionSurface(selectedSlug, selectedSessionId).catch((err) => setError(err.message))}>
-              {sessionBusy === "refresh" ? "Refreshing..." : "Refresh"}
-            </button>
-            <button type="button" disabled={!sessionDetail || ["done", "failed", "blocked", "canceled"].includes(sessionDetail.session.lifecycle_state ?? "") || sessionBusy !== ""} onClick={() => cancelSession().catch((err) => setError(err.message))}>
-              {sessionBusy === "cancel" ? "Canceling..." : "Cancel"}
-            </button>
-            <button type="button" disabled={!sessionDetail || sessionBusy !== ""} onClick={() => revertSession().catch((err) => setError(err.message))}>
-              Revert
-            </button>
-          </div>
-        </section>
-
-        <section className="panel session-events">
-          <div className="panel-title">
-            <h2>Event Log</h2>
-            <span>{sessionDetail?.events.length ?? 0}</span>
-          </div>
-          <div className="event-log">
-            {sessionDetail?.events.slice(-12).map((event) => (
-              <div className="event-item" key={event.event_id}>
-                <strong>{event.event_type}</strong>
-                <span>{event.source} · {new Date(event.timestamp).toLocaleTimeString()}</span>
-                <small>{eventSummary(event)}</small>
+              <div className="session-stat-strip">
+                <div><strong>{sessionDetail.events.length}</strong><span>events</span></div>
+                <div><strong>{sessionDetail.artifacts.length}</strong><span>artifacts</span></div>
+                <div><strong>{sessionDetail.session.worker_pid ?? "—"}</strong><span>worker pid</span></div>
+                <div><strong>{selectedSession?.queue_state ?? "idle"}</strong><span>queue</span></div>
               </div>
-            ))}
+              {latestSessionIssue ? (
+                <div className={`session-banner ${stateTone(sessionDetail.session.lifecycle_state)}`}>
+                  <strong>{sessionDetail.session.lifecycle_state === "blocked" ? "Blocked, not broken" : "Latest issue"}</strong>
+                  <p>{eventSummary(latestSessionIssue)}</p>
+                </div>
+              ) : null}
+              {sessionDetail.session.summary ? (
+                <p className="hint">{sessionDetail.session.summary}</p>
+              ) : null}
+              {sessionDetail.session.working_dir ? (
+                <p className="hint">Working directory: <code>{sessionDetail.session.working_dir}</code></p>
+              ) : null}
+              {latestAssistantMessage ? (
+                <div className="moderator latest-message">
+                  <strong>Latest message</strong>
+                  <MarkdownMessage text={eventSummary(latestAssistantMessage)} />
+                </div>
+              ) : null}
+              <div className="session-actions">
+                <button type="button" disabled={sessionBusy !== ""} onClick={() => refreshSessionSurface(selectedSlug, selectedSessionId).catch((err) => setError(err.message))}>
+                  {sessionBusy === "refresh" ? "Refreshing…" : "Refresh"}
+                </button>
+                <button type="button" disabled={["done", "failed", "blocked", "canceled"].includes(sessionDetail.session.lifecycle_state ?? "") || sessionBusy !== ""} onClick={() => cancelSession().catch((err) => setError(err.message))}>
+                  {sessionBusy === "cancel" ? "Canceling…" : "Cancel"}
+                </button>
+                <button type="button" className="ghost" disabled={sessionBusy !== ""} onClick={() => revertSession().catch((err) => setError(err.message))}>
+                  Revert
+                </button>
+              </div>
+            </section>
+
+            <div className="session-content-row">
+              <section className="panel events-panel">
+                <div className="panel-title">
+                  <h2>Event log</h2>
+                  <span>{sessionDetail.events.length}</span>
+                </div>
+                <div className="event-log">
+                  {sessionDetail.events.slice(-20).reverse().map((event) => (
+                    <div className="event-item" key={event.event_id}>
+                      <strong>{event.event_type}</strong>
+                      <span>{event.source} · {new Date(event.timestamp).toLocaleTimeString()}</span>
+                      <small>{eventSummary(event)}</small>
+                    </div>
+                  ))}
+                  {sessionDetail.events.length === 0 ? (
+                    <p className="empty-copy">No events yet.</p>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => openSessionInTerminal(sessionDetail.session.id, sessionDetail)}
+                >
+                  <TerminalIcon className="size-4" /> Open terminal
+                </button>
+              </section>
+            </div>
           </div>
-        </section>
+        )}
       </section> : null}
 
       {activeView === "memory" ? <section className="memory-grid">
@@ -2809,6 +2975,297 @@ function App() {
         </section>
       </section> : null}
         </aside>
+      ) : null}
+      {terminalTabs.length > 0 ? (
+        <button
+          type="button"
+          className={`terminal-toggle${terminalDockOpen ? " open" : ""}`}
+          onClick={() => setTerminalDockOpen((v) => !v)}
+          title={terminalDockOpen ? "Hide terminal" : "Show terminal"}
+        >
+          <TerminalIcon className="size-4" />
+          <span>Terminal</span>
+          <span className="terminal-toggle-badge">{terminalTabs.length}</span>
+          {terminalDockOpen ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
+        </button>
+      ) : null}
+
+      {terminalDockOpen && terminalTabs.length > 0 ? (
+        <div className="terminal-dock" role="dialog" aria-label="Session terminals">
+          <div className="terminal-dock-header">
+            <div className="terminal-tabs">
+              {terminalTabs.map((sid) => {
+                const detail = terminalDetails[sid];
+                const title = detail?.session.task_title ?? sid;
+                const state = detail?.session.lifecycle_state ?? "—";
+                return (
+                  <div key={sid} className={`terminal-tab${sid === terminalActiveTab ? " active" : ""}`}>
+                    <button
+                      type="button"
+                      className="terminal-tab-label"
+                      onClick={() => {
+                        setTerminalActiveTab(sid);
+                        readSession(sid).catch((err) => setError(err.message));
+                      }}
+                      title={`${title} · ${state}`}
+                    >
+                      <Badge tone={stateBadgeTone(detail?.session.lifecycle_state)}>{stateLabel(detail?.session.lifecycle_state)}</Badge>
+                      <span className="terminal-tab-title">{truncateText(title, 32)}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="terminal-tab-close"
+                      onClick={() => closeTerminalTab(sid)}
+                      aria-label="Close tab"
+                      title="Close tab"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <button
+              type="button"
+              className="ghost terminal-dock-collapse"
+              onClick={() => setTerminalDockOpen(false)}
+              title="Hide terminal dock"
+            >
+              <ChevronDown className="size-4" />
+            </button>
+          </div>
+          <div className="terminal-dock-body">
+            {(() => {
+              const active = terminalDetails[terminalActiveTab];
+              if (!active) return <p className="empty-copy">Loading…</p>;
+              const state = active.session.lifecycle_state ?? "unknown";
+              const isTerminal = ["done", "failed", "blocked", "canceled"].includes(state);
+              const lastMsg = [...active.events].reverse().find((e) => e.event_type === "worker.message");
+              return (
+                <>
+                  <div className={`terminal-status-strip${isTerminal ? " terminal" : ""} ${stateTone(state)}`}>
+                    <Badge tone={stateBadgeTone(state)}>{stateLabel(state)}</Badge>
+                    <span className="terminal-status-detail">
+                      {isTerminal
+                        ? `Session ${state}. ${active.events.length} events captured.`
+                        : `Running… ${active.events.length} events so far.`}
+                    </span>
+                    <button
+                      type="button"
+                      className="ghost terminal-refresh"
+                      onClick={() => readSession(active.session.id).catch((err) => setError(err.message))}
+                      title="Refresh"
+                    >
+                      <RefreshCw className="size-3.5" />
+                    </button>
+                  </div>
+                  {lastMsg ? (
+                    <div className="terminal-latest-message">
+                      <strong>Latest message</strong>
+                      <MarkdownMessage text={eventSummary(lastMsg)} />
+                    </div>
+                  ) : null}
+                  <pre className="terminal-pre dock">{stripAnsi(active.pty_output || "Waiting for terminal output…")}</pre>
+                  {active.session.mode === "visible" && !isTerminal ? (
+                    <div className="terminal-input-stack">
+                      <div className="terminal-quick-keys">
+                        <span className="quick-keys-label">Quick keys:</span>
+                        <button type="button" onClick={() => sendTerminalKey("1").catch((err) => setError(err.message))}>1</button>
+                        <button type="button" onClick={() => sendTerminalKey("2").catch((err) => setError(err.message))}>2</button>
+                        <button type="button" onClick={() => sendTerminalKey("3").catch((err) => setError(err.message))}>3</button>
+                        <button type="button" onClick={() => sendTerminalKey("y").catch((err) => setError(err.message))}>y</button>
+                        <button type="button" onClick={() => sendTerminalKey("n").catch((err) => setError(err.message))}>n</button>
+                        <button type="button" onClick={() => sendTerminalKey("up").catch((err) => setError(err.message))} title="Up arrow">↑</button>
+                        <button type="button" onClick={() => sendTerminalKey("down").catch((err) => setError(err.message))} title="Down arrow">↓</button>
+                        <button type="button" onClick={() => sendTerminalKey("enter").catch((err) => setError(err.message))} title="Enter">⏎</button>
+                        <button type="button" onClick={() => sendTerminalKey("esc").catch((err) => setError(err.message))} title="Escape">Esc</button>
+                      </div>
+                      <form className="terminal-input-row" onSubmit={(event) => { event.preventDefault(); sendTerminalInput().catch((err) => setError(err.message)); }}>
+                        <input
+                          value={terminalInput}
+                          onChange={(event) => setTerminalInput(event.target.value)}
+                          placeholder="Type and press Enter — or use the quick keys above for menus"
+                        />
+                        <button type="submit">Send</button>
+                      </form>
+                    </div>
+                  ) : null}
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      ) : null}
+
+      {sessionLaunchOpen ? (
+        <div className="picker-backdrop" onClick={() => sessionBusy === "" && setSessionLaunchOpen(false)}>
+          <div className="picker-modal session-launch-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="picker-header">
+              <strong>Launch session</strong>
+              <button type="button" className="ghost" onClick={() => setSessionLaunchOpen(false)} disabled={sessionBusy !== ""}>Cancel</button>
+            </div>
+            <p className="hint">Run a harness session on <strong>{selectedWorkspace?.name ?? "—"}</strong>. Start with stub-worker for risk-free smoke tests; switch to claude-code-cli or codex-cli for real work.</p>
+            <form className="stack" onSubmit={(event) => launchSession(event).catch((err) => setError(err.message))}>
+              <label className="form-field">
+                <span>Task (optional)</span>
+                <select
+                  name="task_id"
+                  value={launchTaskId}
+                  onChange={(event) => {
+                    const newId = event.target.value;
+                    setLaunchTaskId(newId);
+                    const task = detail?.tasks.find((t) => t.id === newId);
+                    if (task && (!launchGoal.trim() || launchGoal === detail?.tasks.find((t) => t.id === launchTaskId)?.title)) {
+                      setLaunchGoal(task.title);
+                    }
+                  }}
+                  disabled={sessionBusy !== ""}
+                >
+                  <option value="">No task</option>
+                  {detail?.tasks.map((task) => (
+                    <option key={task.id} value={task.id}>{task.title}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="form-field">
+                <span>Goal</span>
+                <textarea
+                  name="goal"
+                  placeholder="What should the brain do? Be specific — this is the prompt Claude/Codex will read."
+                  value={launchGoal}
+                  onChange={(event) => setLaunchGoal(event.target.value)}
+                  rows={3}
+                  autoFocus
+                  disabled={sessionBusy !== ""}
+                />
+                {launchTaskId && launchGoal === detail?.tasks.find((t) => t.id === launchTaskId)?.title ? (
+                  <small className="hint">Prefilled from the selected task. Edit to add detail.</small>
+                ) : null}
+              </label>
+              <label className="form-field">
+                <span>Brain</span>
+                <select name="brain_id" defaultValue="stub-worker" disabled={enabledBrains.length === 0 || sessionBusy !== ""}>
+                  {enabledBrains.length === 0 ? <option value="">No brains enabled</option> : null}
+                  {enabledBrains.map((brain) => (
+                    <option key={brain.id} value={brain.id}>
+                      {brainDisplayName(brain)} · {runtimeLabel(brain.runtime)} · {accountingLabel(brain.accounting)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="form-field-row">
+                <label className="form-field">
+                  <span>Mode</span>
+                  <select name="mode" defaultValue="headless" disabled={sessionBusy !== ""}>
+                    <option value="headless">Headless (background)</option>
+                    <option value="visible">Visible (PTY)</option>
+                  </select>
+                </label>
+                <label className="form-field">
+                  <span>Scenario</span>
+                  <select name="scenario" defaultValue="default" disabled={sessionBusy !== ""}>
+                    <option value="default">Normal run</option>
+                    <option value="fails">Stub failure</option>
+                    <option value="await-approval">Approval wait</option>
+                    <option value="tool-denied">Tool denied</option>
+                    <option value="idle-timeout">Idle watchdog</option>
+                    <option value="visible-echo">Visible echo</option>
+                    <option value="qa-missing-evidence">QA missing evidence</option>
+                    <option value="file-write">File write</option>
+                    <option value="throughput">Throughput</option>
+                    <option value="long-running">Long running</option>
+                  </select>
+                </label>
+              </div>
+              <button type="submit" disabled={!selectedWorkspace || enabledBrains.length === 0 || sessionBusy !== ""}>
+                {sessionBusy === "launch" ? "Launching…" : "Launch session"}
+              </button>
+            </form>
+          </div>
+        </div>
+      ) : null}
+      {newWorkspaceOpen ? (
+        <div className="picker-backdrop" onClick={() => !workspaceBusy && setNewWorkspaceOpen(false)}>
+          <div className="picker-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="picker-header">
+              <strong>Create workspace</strong>
+              <button type="button" className="ghost" onClick={() => setNewWorkspaceOpen(false)} disabled={workspaceBusy}>Cancel</button>
+            </div>
+            <form className="stack" onSubmit={(event) => createWorkspace(event).catch((err) => setError(err.message))}>
+              <input name="name" placeholder="Workspace name" required autoFocus disabled={workspaceBusy} />
+              <input name="description" placeholder="Description (optional)" disabled={workspaceBusy} />
+              <div className="repo-row">
+                <input
+                  name="repo"
+                  placeholder="/absolute/path/to/repo"
+                  value={repoPath}
+                  onChange={(event) => setRepoPath(event.target.value)}
+                  disabled={workspaceBusy}
+                />
+                <button type="button" className="ghost" onClick={openFolderPicker} disabled={workspaceBusy}>Browse…</button>
+              </div>
+              <p className="hint">The repo path links this workspace to a project folder on disk. WARD watches the repo for changes and uses it as harness working directory.</p>
+              <button type="submit" disabled={workspaceBusy}>{workspaceBusy ? "Creating…" : "Create workspace"}</button>
+            </form>
+          </div>
+        </div>
+      ) : null}
+      {pickerOpen ? (
+        <div className="picker-backdrop" onClick={() => setPickerOpen(false)}>
+          <div className="picker-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="picker-header">
+              <strong>Select project folder</strong>
+              <button type="button" className="ghost" onClick={() => setPickerOpen(false)}>Cancel</button>
+            </div>
+            <div className="picker-path">
+              <span title={pickerPath}>{pickerPath || "—"}</span>
+            </div>
+            <div className="picker-actions">
+              <button
+                type="button"
+                className="ghost"
+                disabled={pickerLoading || !pickerParent}
+                onClick={() => pickerParent && loadPickerPath(pickerParent)}
+              >
+                ↰ Up
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                disabled={pickerLoading}
+                onClick={() => loadPickerPath("")}
+              >
+                Home
+              </button>
+              <button
+                type="button"
+                disabled={pickerLoading || !pickerPath}
+                onClick={() => selectFolderFromPicker(pickerPath)}
+              >
+                Use this folder
+              </button>
+            </div>
+            {pickerError ? <p className="picker-error">{pickerError}</p> : null}
+            <div className="picker-list">
+              {pickerLoading ? <p className="empty-copy">Loading…</p> : null}
+              {!pickerLoading && pickerEntries.length === 0 && !pickerError ? (
+                <p className="empty-copy">No subfolders. Use this folder, or go up.</p>
+              ) : null}
+              {pickerEntries.map((entry) => (
+                <button
+                  type="button"
+                  className="picker-entry"
+                  key={entry.abs_path}
+                  onClick={() => loadPickerPath(entry.abs_path)}
+                  onDoubleClick={() => selectFolderFromPicker(entry.abs_path)}
+                  title={entry.abs_path}
+                >
+                  📁 {entry.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       ) : null}
     </main>
   );

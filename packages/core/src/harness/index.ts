@@ -110,8 +110,8 @@ export const LaunchSessionSchema = z.object({
   allowed_tools: z.array(z.string()).optional().default(["ward.status"]),
   incognito: z.boolean().optional().default(false),
   autonomy_level: AutonomyLevelSchema.optional(),
-  wall_clock_max_ms: z.number().int().positive().optional().default(120000),
-  idle_max_ms: z.number().int().positive().optional().default(30000)
+  wall_clock_max_ms: z.number().int().positive().optional().default(900000),
+  idle_max_ms: z.number().int().positive().optional().default(180000)
 });
 export type LaunchSessionInput = z.input<typeof LaunchSessionSchema>;
 
