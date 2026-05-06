@@ -917,6 +917,18 @@ function App() {
   const [costSummary, setCostSummary] = useState<CostLedgerSummary | null>(null);
   const [costForecast, setCostForecast] = useState<CostForecast | null>(null);
   const [brainBudgets, setBrainBudgets] = useState<BrainBudgetStatus[]>([]);
+  const [localBrainProbe, setLocalBrainProbe] = useState<{
+    reachable: boolean;
+    model_present: boolean;
+    latency_ms: number | null;
+    base_url?: string;
+    model?: string | null;
+    models?: string[];
+    error?: string | null;
+    tested_at?: string;
+  } | null>(null);
+  const [localBrainTest, setLocalBrainTest] = useState<{ reply?: string; error?: string; latency_ms?: number } | null>(null);
+  const [localBrainBusy, setLocalBrainBusy] = useState("");
   const [quotaLedger, setQuotaLedger] = useState<QuotaLedgerEntry[]>([]);
   const [brainBusy, setBrainBusy] = useState("");
   const [mcpEffective, setMcpEffective] = useState<EffectiveMcpConfig | null>(null);
@@ -1366,6 +1378,48 @@ function App() {
       }
     } : current);
     setMessage("Profile saved.");
+  }
+
+  async function runLocalBrainProbe(brainId = "local-openai-compatible") {
+    setLocalBrainBusy("probe");
+    try {
+      const response = await api<{
+        reachable: boolean;
+        model_present: boolean;
+        latency_ms: number | null;
+        base_url?: string;
+        model?: string | null;
+        models?: string[];
+        error?: string | null;
+      }>(`/api/brains/${encodeURIComponent(brainId)}/probe`);
+      setLocalBrainProbe({ ...response, tested_at: new Date().toISOString() });
+    } catch (err) {
+      setLocalBrainProbe({
+        reachable: false,
+        model_present: false,
+        latency_ms: null,
+        error: (err as Error).message,
+        tested_at: new Date().toISOString()
+      });
+    } finally {
+      setLocalBrainBusy("");
+    }
+  }
+
+  async function runLocalBrainTest(brainId = "local-openai-compatible") {
+    setLocalBrainBusy("test");
+    setLocalBrainTest(null);
+    try {
+      const response = await api<{ reply?: string; latency_ms?: number }>(`/api/brains/${encodeURIComponent(brainId)}/test-reply`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      setLocalBrainTest({ reply: response.reply, latency_ms: response.latency_ms });
+    } catch (err) {
+      setLocalBrainTest({ error: (err as Error).message });
+    } finally {
+      setLocalBrainBusy("");
+    }
   }
 
   async function toggleBrain(brainId: string, enabled: boolean) {
@@ -1923,45 +1977,148 @@ function App() {
     setOrbPulse((value) => value + 1);
   }
 
+  function applyOrbSurface(surface: CommandView | undefined) {
+    if (!surface) return;
+    if (surface === "sessions") {
+      setActiveView("sessions");
+      setSessionsOpen(true);
+      setRightPanelOpen(false);
+    } else {
+      setActiveView(surface as CommandView);
+      setRightPanelOpen(true);
+      setSessionsOpen(false);
+    }
+  }
+
   async function submitOrbChat(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = chatText.trim();
     if (!text) {
       return;
     }
-    const timestamp = new Date().toISOString();
+    const userTimestamp = new Date().toISOString();
     pulseOrb();
     setOrbBusy(true);
-    setOrbTurns((turns) => [...turns, {
-      id: `user_${timestamp}_${turns.length}`,
-      role: "user",
-      text,
-      timestamp
-    }]);
+    const userTurnId = `user_${userTimestamp}_${Math.random().toString(36).slice(2, 8)}`;
+    const wardTurnId = `ward_${userTimestamp}_${Math.random().toString(36).slice(2, 8)}`;
+    setOrbTurns((turns) => [
+      ...turns,
+      { id: userTurnId, role: "user", text, timestamp: userTimestamp }
+    ]);
     setChatText("");
+
+    const history = orbTurns.slice(-8).map((turn) => ({
+      role: turn.role === "ward" ? "assistant" : "user",
+      content: turn.text
+    }));
+
     try {
-      const response = await api<OrbChatResponse>("/api/orb/chat", {
+      const response = await fetch("/api/orb/chat/stream", {
         method: "POST",
-        body: JSON.stringify({ message: text })
+        headers: { "content-type": "application/json", accept: "text/event-stream" },
+        body: JSON.stringify({ message: text, history })
       });
-      pulseOrb();
-      setOrbTurns((turns) => [...turns, {
-        id: `ward_${response.trace_id}`,
-        role: "ward",
-        text: response.reply,
-        timestamp: response.timestamp
-      }]);
-      if (response.surface === "sessions") {
-        setActiveView("sessions");
-        setSessionsOpen(true);
-        setRightPanelOpen(false);
-      } else {
-        setActiveView(response.surface);
-        setRightPanelOpen(true);
-        setSessionsOpen(false);
+
+      if (!response.ok || !response.body) {
+        if (response.status === 503) {
+          // No local brain enabled — fall back to deterministic router.
+          await runOrbChatFallback(text, wardTurnId);
+          return;
+        }
+        const detail = await response.text().catch(() => "");
+        throw new Error(`Orb chat stream failed (${response.status}): ${detail.slice(0, 200) || response.statusText}`);
       }
+
+      // Insert empty assistant turn to be filled by deltas.
+      setOrbTurns((turns) => [
+        ...turns,
+        { id: wardTurnId, role: "ward", text: "", timestamp: new Date().toISOString() }
+      ]);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let assembled = "";
+      let chosenSurface: CommandView | undefined;
+      let streamError: string | null = null;
+
+      const processFrame = (frame: string) => {
+        let eventName = "message";
+        let dataLine = "";
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("event:")) eventName = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataLine += line.slice(5).trim();
+        }
+        if (!dataLine) return;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(dataLine);
+        } catch {
+          return;
+        }
+        if (eventName === "delta" && typeof (parsed as { text?: unknown }).text === "string") {
+          const chunk = (parsed as { text: string }).text;
+          assembled += chunk;
+          setOrbTurns((turns) => turns.map((t) => t.id === wardTurnId ? { ...t, text: assembled } : t));
+        } else if (eventName === "done") {
+          const surface = (parsed as { surface?: string }).surface;
+          if (typeof surface === "string") {
+            chosenSurface = surface as CommandView;
+          }
+        } else if (eventName === "error") {
+          streamError = (parsed as { message?: string }).message ?? "Unknown stream error.";
+        }
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let frameEnd = buffer.indexOf("\n\n");
+        while (frameEnd >= 0) {
+          processFrame(buffer.slice(0, frameEnd));
+          buffer = buffer.slice(frameEnd + 2);
+          frameEnd = buffer.indexOf("\n\n");
+        }
+      }
+      if (buffer.trim().length > 0) {
+        processFrame(buffer);
+      }
+
+      if (streamError) {
+        setOrbTurns((turns) => turns.map((t) => t.id === wardTurnId
+          ? { ...t, text: assembled || `Brain error: ${streamError}` }
+          : t));
+        setError(streamError);
+      } else {
+        pulseOrb();
+        applyOrbSurface(chosenSurface);
+        if (assembled.trim().length > 0 && overview && overview.profile.tts_enabled) {
+          speak(assembled, overview.profile);
+        }
+      }
+    } catch (err) {
+      const message = (err as Error).message;
+      setError(message);
+      setOrbTurns((turns) => turns.map((t) => t.id === wardTurnId ? { ...t, text: `Error: ${message}` } : t));
     } finally {
       setOrbBusy(false);
+    }
+  }
+
+  async function runOrbChatFallback(text: string, wardTurnId: string) {
+    const response = await api<OrbChatResponse>("/api/orb/chat", {
+      method: "POST",
+      body: JSON.stringify({ message: text })
+    });
+    pulseOrb();
+    setOrbTurns((turns) => [
+      ...turns,
+      { id: wardTurnId, role: "ward", text: response.reply, timestamp: response.timestamp }
+    ]);
+    applyOrbSurface(response.surface as CommandView);
+    if (overview && overview.profile.tts_enabled && response.reply.trim().length > 0) {
+      speak(response.reply, overview.profile);
     }
   }
 
@@ -2056,12 +2213,20 @@ function App() {
         </form>
         {orbTurns.length ? (
           <div className="orb-transcript">
-            {orbTurns.slice(-4).map((turn) => (
-              <div className={turn.role === "ward" ? "ward" : "user"} key={turn.id}>
-                <span>{turn.role === "ward" ? "WARD" : "You"}</span>
-                <p>{turn.text}</p>
-              </div>
-            ))}
+            {orbTurns.slice(-4).map((turn, idx, list) => {
+              const isLastWard = idx === list.length - 1 && turn.role === "ward";
+              const showTyping = isLastWard && orbBusy && turn.text.length === 0;
+              return (
+                <div className={turn.role === "ward" ? "ward" : "user"} key={turn.id}>
+                  <span>{turn.role === "ward" ? "WARD" : "You"}</span>
+                  {showTyping ? (
+                    <p className="orb-typing"><span /><span /><span /></p>
+                  ) : (
+                    <p>{turn.text}</p>
+                  )}
+                </div>
+              );
+            })}
           </div>
         ) : null}
       </section>
@@ -2347,6 +2512,59 @@ function App() {
               <strong>Last doctor</strong>
               <span>{mcpDoctor.summary.passed} ok · {mcpDoctor.summary.failed} failed · {mcpDoctor.summary.skipped} skipped</span>
             </div>
+          ) : null}
+        </section>
+
+        <section className="panel local-brain-panel">
+          <div className="panel-title">
+            <h2>Local brain (orb chat)</h2>
+            <span>{localBrainProbe?.reachable ? "reachable" : localBrainProbe ? "unreachable" : "untested"}</span>
+          </div>
+          <p className="hint">
+            Powers the orb conversation. Configured brain: <code>local-openai-compatible</code> at <code>{localBrainProbe?.base_url ?? "http://127.0.0.1:11434/v1"}</code> · model <code>{localBrainProbe?.model ?? "gemma4:e2b"}</code>.
+          </p>
+          <div className="local-brain-row">
+            <button type="button" disabled={localBrainBusy !== ""} onClick={() => runLocalBrainProbe().catch((err) => setError(err.message))}>
+              {localBrainBusy === "probe" ? "Probing…" : "Probe"}
+            </button>
+            <button type="button" disabled={localBrainBusy !== ""} onClick={() => runLocalBrainTest().catch((err) => setError(err.message))}>
+              {localBrainBusy === "test" ? "Testing…" : "Test reply"}
+            </button>
+            {localBrainProbe ? (
+              <span className="hint">
+                {localBrainProbe.reachable ? "✓ reachable" : "× unreachable"}
+                {typeof localBrainProbe.latency_ms === "number" ? ` · ${localBrainProbe.latency_ms} ms` : ""}
+                {localBrainProbe.reachable ? (localBrainProbe.model_present ? " · model present" : " · model not pulled") : ""}
+              </span>
+            ) : null}
+          </div>
+          {localBrainProbe && !localBrainProbe.reachable ? (
+            <div className="welcome-card subtle">
+              <p>
+                <strong>Ollama not reachable.</strong> Start it with <code>ollama serve</code> and pull the model with <code>ollama pull gemma4:e2b</code>.
+              </p>
+              {localBrainProbe.error ? <p className="hint">Detail: {localBrainProbe.error}</p> : null}
+            </div>
+          ) : null}
+          {localBrainProbe && localBrainProbe.reachable && !localBrainProbe.model_present ? (
+            <div className="welcome-card subtle">
+              <p>
+                Server reachable but <code>{localBrainProbe.model ?? "gemma4:e2b"}</code> isn't pulled. Run <code>ollama pull {localBrainProbe.model ?? "gemma4:e2b"}</code>.
+              </p>
+              {localBrainProbe.models && localBrainProbe.models.length > 0 ? (
+                <p className="hint">Models pulled: {localBrainProbe.models.slice(0, 6).join(", ")}{localBrainProbe.models.length > 6 ? "…" : ""}</p>
+              ) : null}
+            </div>
+          ) : null}
+          {localBrainTest?.reply ? (
+            <div className="moderator">
+              <strong>Test reply</strong>
+              <p>{localBrainTest.reply}</p>
+              {typeof localBrainTest.latency_ms === "number" ? <small className="hint">{localBrainTest.latency_ms} ms</small> : null}
+            </div>
+          ) : null}
+          {localBrainTest?.error ? (
+            <p className="hint" style={{ color: "#b13a3a" }}>Test failed: {localBrainTest.error}</p>
           ) : null}
         </section>
 

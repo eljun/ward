@@ -37,7 +37,7 @@ import {
   type HarnessLifecycleState,
   type RuntimeHealth
 } from "@ward/core";
-import { ClaudeCliHarnessAdapter, CodexCliHarnessAdapter, StubHarnessAdapter, type RunningHarness } from "@ward/harness";
+import { ClaudeCliHarnessAdapter, CodexCliHarnessAdapter, StubHarnessAdapter, ollamaChat, probeOpenAiCompatible, streamOllamaChat, type ChatMessage, type RunningHarness } from "@ward/harness";
 import {
   acquireInstanceLock,
   addTaskArtifact,
@@ -553,6 +553,185 @@ async function orbChatReply(message: string): Promise<OrbChatReply> {
   };
 }
 
+const NAV_VOCAB: Array<{ surface: OrbChatSurface; words: string[]; reply: string }> = [
+  { surface: "sessions", words: ["sessions", "session", "runs", "run"], reply: "Opening Sessions." },
+  { surface: "workspaces", words: ["workspaces", "workspace", "tasks", "projects"], reply: "Opening Workspaces." },
+  { surface: "planning", words: ["planning", "plans", "plan", "plan mode"], reply: "Opening Planning." },
+  { surface: "memory", words: ["memory", "wiki", "notes"], reply: "Opening Memory." },
+  { surface: "settings", words: ["settings", "preferences", "config", "configuration"], reply: "Opening Settings." },
+  { surface: "overview", words: ["overview", "home", "dashboard", "brief"], reply: "Opening Overview." }
+];
+
+function matchNavIntent(message: string): { surface: OrbChatSurface; reply: string } | null {
+  const trimmed = message.trim().replace(/[.,!?;:]+$/, "").toLowerCase();
+  if (trimmed.length === 0 || trimmed.length > 40) return null;
+  // Strip leading verb + optional article: "open the X", "show me X", "go to X", "switch to X", "take me to X"
+  const stripped = trimmed
+    .replace(/^(please\s+)?(open|show|go to|switch to|take me to|navigate to|jump to|see)\s+(me\s+)?(the\s+|a\s+|an\s+)?/, "")
+    .replace(/\s+(tab|view|panel|page|screen)$/, "")
+    .trim();
+  for (const entry of NAV_VOCAB) {
+    if (entry.words.includes(stripped)) {
+      return { surface: entry.surface, reply: entry.reply };
+    }
+  }
+  return null;
+}
+
+function composeOrbSystemPrompt(): string {
+  const profile = getProfile();
+  const workspaces = listWorkspaces();
+  const tasks = listTasks();
+  const sessions = listHarnessSessions({ include_incognito: false });
+  const openTasks = tasks.filter((task) => task.status !== "done" && task.status !== "canceled").length;
+  const blockers = sessions.filter((s) => s.lifecycle_state === "blocked").length;
+  const name = profile.display_name || profile.honorific || "the user";
+  const tone = profile.persona_tone ?? "casual";
+  return [
+    `You are WARD, ${name}'s local peer developer. Tone: ${tone}. Reply in 1-3 short sentences unless asked for more.`,
+    `State: workspaces=${workspaces.length}, open_tasks=${openTasks}, blockers=${blockers}, sessions=${sessions.length}.`,
+    `For real code or file edits, tell the user to launch a Sessions run (claude-code-cli or codex-cli). Don't write code yourself.`
+  ].join("\n");
+}
+
+const DEFAULT_OPENAI_COMPATIBLE_MODEL = "gemma4:e2b";
+
+function getLocalChatBrain(): { id: string; base_url: string; model: string } | null {
+  const registry = getBrainRegistry();
+  const brain = registry.brains.find((b) => b.kind === "openai-compatible" && b.enabled && b.base_url);
+  if (!brain || !brain.base_url) return null;
+  const model = brain.model || DEFAULT_OPENAI_COMPATIBLE_MODEL;
+  return { id: brain.id, base_url: brain.base_url, model };
+}
+
+type OrbHistoryEntry = { role: "user" | "assistant"; content: string };
+
+function buildChatMessages(history: OrbHistoryEntry[], userMessage: string): ChatMessage[] {
+  const messages: ChatMessage[] = [{ role: "system", content: composeOrbSystemPrompt() }];
+  for (const turn of history.slice(-8)) {
+    if (turn?.role !== "user" && turn?.role !== "assistant") continue;
+    if (typeof turn.content !== "string" || turn.content.length === 0) continue;
+    messages.push({ role: turn.role, content: turn.content.slice(0, 4000) });
+  }
+  messages.push({ role: "user", content: userMessage });
+  return messages;
+}
+
+async function handleOrbChatStream(req: Request): Promise<Response> {
+  const body = await readJson(req) as { message?: unknown; history?: unknown };
+  const message = typeof body.message === "string" ? body.message.trim() : "";
+  if (!message) {
+    return json({ ok: false, error: "Message is required." }, 400);
+  }
+  const history = Array.isArray(body.history) ? (body.history as OrbHistoryEntry[]) : [];
+  const traceId = createTraceId("orb");
+  const ts = new Date().toISOString();
+
+  const nav = matchNavIntent(message);
+  if (nav) {
+    const stream = new ReadableStream({
+      start(controller) {
+        const send = (event: string, data: unknown) =>
+          controller.enqueue(new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        send("delta", { text: nav.reply });
+        send("done", { trace_id: traceId, timestamp: ts, surface: nav.surface });
+        controller.close();
+      }
+    });
+    return new Response(stream, {
+      headers: {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive"
+      }
+    });
+  }
+
+  const brain = getLocalChatBrain();
+  if (!brain) {
+    return json({
+      ok: false,
+      error: "No local OpenAI-compatible brain enabled. Enable `local-openai-compatible` in Settings."
+    }, 503);
+  }
+
+  const messages = buildChatMessages(history, message);
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const encoder = new TextEncoder();
+      const send = (event: string, data: unknown) =>
+        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      try {
+        for await (const evt of streamOllamaChat({
+          baseUrl: brain.base_url,
+          model: brain.model,
+          messages,
+          temperature: 0.7,
+          max_tokens: 384,
+          keep_alive: "60m",
+          think: false,
+          timeoutMs: 120000
+        })) {
+          if (evt.type === "delta") send("delta", { text: evt.text });
+          else if (evt.type === "error") send("error", { message: evt.message });
+        }
+      } catch (err) {
+        send("error", { message: (err as Error).message });
+      }
+      send("done", { trace_id: traceId, timestamp: ts });
+      controller.close();
+    }
+  });
+
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive"
+    }
+  });
+}
+
+async function handleBrainTestReply(brainId: string, body: { message?: unknown }): Promise<Response> {
+  const registry = getBrainRegistry();
+  const brain = registry.brains.find((b) => b.id === brainId);
+  if (!brain) return json({ ok: false, error: `Unknown brain: ${brainId}` }, 404);
+  if (brain.kind !== "openai-compatible" || !brain.base_url) {
+    return json({ ok: false, error: `Brain ${brainId} is not an OpenAI-compatible chat brain.` }, 400);
+  }
+  const model = brain.model || DEFAULT_OPENAI_COMPATIBLE_MODEL;
+  const message = typeof body.message === "string" && body.message.trim().length > 0
+    ? body.message.trim()
+    : "Reply with one short greeting and your model name.";
+  const startedAt = Date.now();
+  try {
+    const result = await ollamaChat({
+      baseUrl: brain.base_url,
+      model,
+      messages: [{ role: "user", content: message }],
+      temperature: 0.7,
+      max_tokens: 128,
+      keep_alive: "60m",
+      think: false,
+      timeoutMs: 15000
+    });
+    return json({
+      ok: true,
+      brain_id: brainId,
+      reply: result.text,
+      latency_ms: Date.now() - startedAt
+    });
+  } catch (err) {
+    return json({
+      ok: false,
+      brain_id: brainId,
+      error: (err as Error).message,
+      latency_ms: Date.now() - startedAt
+    }, 502);
+  }
+}
+
 function route(url: URL): string[] {
   return url.pathname.split("/").filter(Boolean).slice(1);
 }
@@ -636,6 +815,10 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
       return json({ ok: true, profile: updateProfile(ProfilePatchSchema.parse(await readJson(req))) });
     }
 
+    if (parts[0] === "orb" && parts[1] === "chat" && parts[2] === "stream" && req.method === "POST") {
+      return handleOrbChatStream(req);
+    }
+
     if (parts[0] === "orb" && parts[1] === "chat" && req.method === "POST") {
       const body = await readJson(req) as { message?: unknown };
       const message = typeof body.message === "string" ? body.message.trim() : "";
@@ -652,6 +835,32 @@ async function api(req: Request, startedAt: number, port: number): Promise<Respo
     if (parts[0] === "preferences" && req.method === "PATCH" && parts[1] && parts[2]) {
       const body = await readJson(req) as { value?: unknown; workspace_id?: number };
       return json({ ok: true, preference: setPreference(parts[1] as "global" | "workspace" | "repo", parts[2], body.value, body.workspace_id) });
+    }
+
+    if (parts[0] === "brains" && parts[1] && parts[2] === "probe" && req.method === "GET") {
+      const registry = getBrainRegistry();
+      const brain = registry.brains.find((b) => b.id === parts[1]);
+      if (!brain) {
+        return json({ ok: false, error: `Unknown brain: ${parts[1]}` }, 404);
+      }
+      if (brain.kind !== "openai-compatible" || !brain.base_url) {
+        return json({ ok: false, error: `Brain ${brain.id} is not an OpenAI-compatible brain.` }, 400);
+      }
+      const expectedModel = brain.model || DEFAULT_OPENAI_COMPATIBLE_MODEL;
+      const probe = await probeOpenAiCompatible(brain.base_url, expectedModel);
+      return json({
+        ok: true,
+        brain_id: brain.id,
+        base_url: brain.base_url,
+        model: expectedModel,
+        configured_model: brain.model,
+        ...probe
+      });
+    }
+
+    if (parts[0] === "brains" && parts[1] && parts[2] === "test-reply" && req.method === "POST") {
+      const body = await readJson(req) as { message?: unknown };
+      return handleBrainTestReply(parts[1], body);
     }
 
     if (parts[0] === "brains" && req.method === "GET" && !parts[1]) {

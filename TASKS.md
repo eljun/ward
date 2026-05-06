@@ -23,6 +23,18 @@
 _(none — pick the next planned task)_
 
 ## Testing
+
+- [ ] `14` Conversational Orb Chat with a Local Brain
+  - Doc: [docs/task/014-conversational-orb-chat-local-brain.md](docs/task/014-conversational-orb-chat-local-brain.md)
+  - Goal: Replace the deterministic regex orb chat with a streaming LLM conversation backed by a local Ollama brain (`gemma4:e2b`); add an OpenAI-compatible streaming adapter, a system prompt that frames WARD as a peer-developer, an SSE stream endpoint, a Settings reachability probe, an explicit-nav escape hatch, and auto text-to-speech on reply.
+
+- Task 014 OpenAI-compatible chat client streams `delta`/`done`/`error` SSE events and probes Ollama via `/api/tags` + `/v1/models` fallback.
+- Task 014 `POST /api/orb/chat/stream` returns SSE; nav-intent escape hatch short-circuits without calling the brain.
+- Task 014 `GET /api/brains/{id}/probe` reports reachability, latency, and model presence; `POST /api/brains/{id}/test-reply` returns a one-shot completion.
+- Task 014 UI orb chat consumes the stream, renders a typing indicator, and auto-speaks via `speechSynthesis` when `profile.tts_enabled`.
+- Task 014 Settings adds a Local brain panel with Probe + Test reply buttons and copy-paste guidance for `ollama serve` / `ollama pull gemma4:e2b`.
+- Task 014 default `gemma4:e2b` is applied at runtime when `local-openai-compatible.model` is null in existing `brains.yaml`.
+
 - `bun install --frozen-lockfile`
 - `bun run build`
 - `WARD_HOME=/tmp/ward-codex-smoke bun run ward --json init`
