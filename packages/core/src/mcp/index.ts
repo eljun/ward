@@ -127,6 +127,89 @@ export const McpToolCallResultSchema = z.object({
 });
 export type McpToolCallResult = z.infer<typeof McpToolCallResultSchema>;
 
+export const WardMcpToolNameSchema = z.enum([
+  "ward.list_workspaces",
+  "ward.get_workspace",
+  "ward.list_sessions",
+  "ward.get_session",
+  "ward.list_plan_packets",
+  "ward.get_plan_packet",
+  "ward.read_wiki_page",
+  "ward.search",
+  "ward.list_active_blockers",
+  "ward.status"
+]);
+export type WardMcpToolName = z.infer<typeof WardMcpToolNameSchema>;
+
+export const WardMcpAuthInputSchema = z.object({
+  token: z.string().min(1).optional()
+});
+export type WardMcpAuthInput = z.input<typeof WardMcpAuthInputSchema>;
+
+const WardMcpReferenceSchema = z.union([z.string().min(1), z.number().int().positive()]).transform(String);
+const WardMcpLimitSchema = z.number().int().positive().max(50).optional().default(20);
+
+export const WardMcpListWorkspacesInputSchema = WardMcpAuthInputSchema.extend({
+  limit: WardMcpLimitSchema
+});
+export type WardMcpListWorkspacesInput = z.input<typeof WardMcpListWorkspacesInputSchema>;
+
+export const WardMcpGetWorkspaceInputSchema = WardMcpAuthInputSchema.extend({
+  id: WardMcpReferenceSchema
+});
+export type WardMcpGetWorkspaceInput = z.input<typeof WardMcpGetWorkspaceInputSchema>;
+
+export const WardMcpListSessionsInputSchema = WardMcpAuthInputSchema.extend({
+  workspace: z.string().min(1).optional(),
+  state: z.string().min(1).optional(),
+  include_incognito: z.boolean().optional().default(false),
+  limit: WardMcpLimitSchema
+});
+export type WardMcpListSessionsInput = z.input<typeof WardMcpListSessionsInputSchema>;
+
+export const WardMcpGetSessionInputSchema = WardMcpAuthInputSchema.extend({
+  id: z.string().min(1),
+  event_limit: WardMcpLimitSchema
+});
+export type WardMcpGetSessionInput = z.input<typeof WardMcpGetSessionInputSchema>;
+
+export const WardMcpListPlanPacketsInputSchema = WardMcpAuthInputSchema.extend({
+  workspace: z.string().min(1).optional(),
+  limit: WardMcpLimitSchema
+});
+export type WardMcpListPlanPacketsInput = z.input<typeof WardMcpListPlanPacketsInputSchema>;
+
+export const WardMcpGetPlanPacketInputSchema = WardMcpAuthInputSchema.extend({
+  id: z.string().min(1)
+});
+export type WardMcpGetPlanPacketInput = z.input<typeof WardMcpGetPlanPacketInputSchema>;
+
+export const WardMcpReadWikiPageInputSchema = WardMcpAuthInputSchema.extend({
+  scope: z.string().min(1),
+  page: z.string().min(1)
+});
+export type WardMcpReadWikiPageInput = z.input<typeof WardMcpReadWikiPageInputSchema>;
+
+export const WardMcpSearchInputSchema = WardMcpAuthInputSchema.extend({
+  query: z.string().min(1),
+  scope: z.string().min(1).optional(),
+  limit: WardMcpLimitSchema
+});
+export type WardMcpSearchInput = z.input<typeof WardMcpSearchInputSchema>;
+
+export const WardMcpListActiveBlockersInputSchema = WardMcpAuthInputSchema.extend({
+  workspace: z.string().min(1).optional(),
+  limit: WardMcpLimitSchema
+});
+export type WardMcpListActiveBlockersInput = z.input<typeof WardMcpListActiveBlockersInputSchema>;
+
+export const WardMcpStatusInputSchema = z.object({
+  state: z.string().min(1).optional().default("visible"),
+  detail: z.string().optional().default("WARD MCP status check."),
+  progress_pct: z.number().min(0).max(1).optional().default(0)
+});
+export type WardMcpStatusInput = z.input<typeof WardMcpStatusInputSchema>;
+
 export const McpServerConfigSchema = z.object({
   command: z.string().min(1).optional(),
   args: z.array(z.string()).optional().default([]),

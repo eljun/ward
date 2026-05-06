@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { randomBytes } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, statSync } from "node:fs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -22,6 +23,7 @@ import {
   resolveWardPaths,
   rotateDeviceToken,
   runMigrations,
+  runWardMcpServer,
   checkMemoryGit,
   warmCacheStats,
   ensureBrainRegistry,
@@ -251,6 +253,175 @@ async function runtimeWebSocket(path: string): Promise<WebSocket> {
   const token = await readDeviceToken(paths);
   const separator = path.includes("?") ? "&" : "?";
   return new WebSocket(`ws://127.0.0.1:${state.port}${path}${separator}token=${encodeURIComponent(token)}`);
+}
+
+type SmokeResponse = {
+  jsonrpc?: "2.0";
+  id?: number;
+  result?: unknown;
+  error?: {
+    code?: number;
+    message?: string;
+    data?: unknown;
+  };
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function smokeStructuredContent(response: SmokeResponse): Record<string, unknown> {
+  return asRecord(asRecord(response.result).structuredContent);
+}
+
+async function commandMcpSmokeServe(args: string[]): Promise<CliResult> {
+  const parsed = parseFlags(args);
+  const timeoutMs = numberFlag(parsed.flags, "timeout-ms") ?? 5000;
+  const token = randomBytes(24).toString("base64url");
+  const repoRoot = resolveRepoRoot();
+  const cliEntry = resolve(repoRoot, "apps/cli/src/main.ts");
+  const child = spawn(process.execPath, [cliEntry, "mcp-serve", "--token", token], {
+    cwd: repoRoot,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      WARD_REPO_ROOT: repoRoot
+    }
+  });
+  if (!child.stdin || !child.stdout || !child.stderr) {
+    throw new Error("Failed to spawn WARD MCP smoke server pipes.");
+  }
+
+  const lines: string[] = [];
+  const waiters: Array<(line: string) => void> = [];
+  let stdoutBuffer = "";
+  let stderrText = "";
+  let exited: string | null = null;
+
+  const pushLine = (line: string): void => {
+    const waiter = waiters.shift();
+    if (waiter) {
+      waiter(line);
+      return;
+    }
+    lines.push(line);
+  };
+
+  child.stdout.on("data", (chunk) => {
+    stdoutBuffer += String(chunk);
+    while (stdoutBuffer.includes("\n")) {
+      const separator = stdoutBuffer.indexOf("\n");
+      const line = stdoutBuffer.slice(0, separator).trim();
+      stdoutBuffer = stdoutBuffer.slice(separator + 1);
+      if (line) {
+        pushLine(line);
+      }
+    }
+  });
+  child.stderr.on("data", (chunk) => {
+    stderrText += String(chunk);
+  });
+  child.on("exit", (code, signal) => {
+    exited = signal ?? String(code ?? "unknown");
+  });
+
+  const waitLine = async (): Promise<string> => {
+    if (lines.length > 0) {
+      return lines.shift()!;
+    }
+    return new Promise((resolveLine, rejectLine) => {
+      const timer = setTimeout(() => {
+        const suffix = stderrText.trim() ? ` stderr: ${stderrText.trim()}` : "";
+        rejectLine(new Error(`Timed out waiting for MCP smoke response${exited ? ` after exit ${exited}` : ""}.${suffix}`));
+      }, timeoutMs);
+      timer.unref?.();
+      waiters.push((line) => {
+        clearTimeout(timer);
+        resolveLine(line);
+      });
+    });
+  };
+
+  let nextId = 1;
+  const request = async (method: string, params: Record<string, unknown> = {}): Promise<SmokeResponse> => {
+    const id = nextId;
+    nextId += 1;
+    child.stdin!.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+    const line = await waitLine();
+    const response = JSON.parse(line) as SmokeResponse;
+    if (response.id !== id) {
+      throw new Error(`Expected MCP response id ${id}, received ${String(response.id)}`);
+    }
+    return response;
+  };
+
+  try {
+    const initialize = await request("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "ward-smoke", version: "0.0.0" }
+    });
+    if (initialize.error) {
+      throw new Error(`initialize failed: ${initialize.error.message ?? initialize.error.code}`);
+    }
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} })}\n`);
+
+    const tools = await request("tools/list");
+    if (tools.error) {
+      throw new Error(`tools/list failed: ${tools.error.message ?? tools.error.code}`);
+    }
+    const toolItems = Array.isArray(asRecord(tools.result).tools) ? asRecord(tools.result).tools as unknown[] : [];
+    const toolNames = toolItems.map((item) => String(asRecord(item).name));
+    const mutatingNames = toolNames.filter((name) => /\.(create|update|delete|write|append|approve|start|launch|set|unset|rotate|remove|enable|disable)\b/.test(name));
+    if (mutatingNames.length > 0) {
+      throw new Error(`tools/list included mutation-like tools: ${mutatingNames.join(", ")}`);
+    }
+
+    const denied = await request("tools/call", {
+      name: "ward.list_workspaces",
+      arguments: {}
+    });
+    if (!denied.error || denied.error.code !== -32001) {
+      throw new Error("unauthenticated list_workspaces was not denied");
+    }
+
+    const workspaces = await request("tools/call", {
+      name: "ward.list_workspaces",
+      arguments: { token }
+    });
+    if (workspaces.error) {
+      throw new Error(`authenticated list_workspaces failed: ${workspaces.error.message ?? workspaces.error.code}`);
+    }
+
+    const status = await request("tools/call", {
+      name: "ward.status",
+      arguments: { state: "testing", detail: "WARD MCP smoke.", progress_pct: 1 }
+    });
+    if (status.error || smokeStructuredContent(status).ok !== true) {
+      throw new Error(`ward.status failed: ${status.error?.message ?? "missing ok"}`);
+    }
+
+    return {
+      ok: true,
+      command: "mcp smoke-serve",
+      timestamp: nowIso(),
+      message: "WARD MCP stdio smoke passed.",
+      data: {
+        initialized: true,
+        tool_count: toolNames.length,
+        tools: toolNames,
+        unauthenticated_denied: true,
+        workspace_count: Array.isArray(smokeStructuredContent(workspaces).workspaces)
+          ? (smokeStructuredContent(workspaces).workspaces as unknown[]).length
+          : 0,
+        status: smokeStructuredContent(status)
+      }
+    };
+  } finally {
+    child.kill("SIGTERM");
+  }
 }
 
 async function commandInit(): Promise<CliResult> {
@@ -1101,6 +1272,10 @@ async function commandSecrets(args: string[]): Promise<CliResult> {
 
 async function commandMcp(args: string[]): Promise<CliResult> {
   const [subcommand = "list", ...rest] = args;
+  if (subcommand === "smoke-serve") {
+    return commandMcpSmokeServe(rest);
+  }
+
   if (subcommand === "call") {
     const parsed = parseFlags(rest);
     const [serverId, toolName] = parsed.positional;
@@ -1274,7 +1449,7 @@ async function commandMcp(args: string[]): Promise<CliResult> {
     return { ok: true, command: "mcp remove", timestamp: nowIso(), message: "WARD MCP server removed.", data };
   }
 
-  throw new Error("Usage: ward mcp list|servers|doctor|policy|call|add|enable|disable|remove");
+  throw new Error("Usage: ward mcp list|servers|doctor|policy|call|smoke-serve|add|enable|disable|remove");
 }
 
 async function commandWorkflow(args: string[]): Promise<CliResult> {
@@ -1714,6 +1889,17 @@ async function dispatch(args: string[]): Promise<CliResult> {
 }
 
 const parsed = parseArgs(process.argv.slice(2));
+if (parsed.args[0] === "mcp-serve") {
+  const flags = parseFlags(parsed.args.slice(1)).flags;
+  try {
+    await runWardMcpServer({ session_token: stringFlag(flags, "token") });
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
 try {
   emit(await dispatch(parsed.args), parsed.json);
 } catch (error) {

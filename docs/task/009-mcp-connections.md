@@ -255,3 +255,17 @@ freeze/unfreeze state are recorded in `quota_ledger`; open breakers return a
 synthetic `server_unavailable` result until `ward quota unfreeze` or a
 successful half-open probe clears the freeze. HTTP calls, approval UI,
 long-lived pools, and WARD-as-MCP-server remain deferred.
+
+### WARD as a Read-Only MCP Server Slice
+
+[009F WARD as a Read-Only MCP Server](009f-ward-mcp-server.md) adds
+`ward mcp-serve`, a stdio MCP server for external MCP-aware clients. It
+implements `initialize`, `tools/list`, and `tools/call` for ten read-only
+`ward.*` tools covering workspaces, sessions, plan packets, wiki reads,
+memory search, active blockers, and synthetic worker status. Non-status
+reads require a short-lived session token supplied through `--token`,
+`WARD_MCP_SESSION_TOKEN`, or `WARD_MCP_TOKEN`; `ward.status` stays tokenless
+for harness worker status updates. The slice adds a smoke client with
+`ward mcp smoke-serve` and keeps mutation tools out of the advertised tool
+list. Mutation tools, network transport, OAuth, and UI client setup remain
+deferred.

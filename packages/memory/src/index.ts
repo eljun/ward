@@ -14,4 +14,5 @@ export * from "./brains.ts";
 export * from "./mcp.ts";
 export * from "./mcp-policy.ts";
 export * from "./mcp-proxy.ts";
+export * from "./ward-mcp-server.ts";
 export * from "./secrets.ts";

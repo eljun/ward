@@ -441,6 +441,21 @@ export function getWorkspaceByIdOrSlug(value: string): Workspace | null {
   return getWorkspaceBySlug(value);
 }
 
+function workspaceDetailFromRow(db: Database, workspace: WorkspaceRow): {
+  workspace: Workspace;
+  repos: WorkspaceRepo[];
+  attachments: WardAttachment[];
+  tasks: WardTask[];
+} {
+  const parsed = workspaceFromRow(workspace);
+  return {
+    workspace: parsed,
+    repos: db.query<WorkspaceRepoRow, [number]>("SELECT * FROM workspace_repo WHERE workspace_id = ? ORDER BY is_primary DESC, id ASC").all(parsed.id).map(repoFromRow),
+    attachments: db.query<AttachmentRow, [number]>("SELECT * FROM attachment WHERE workspace_id = ? ORDER BY created_at DESC").all(parsed.id).map(attachmentFromRow),
+    tasks: db.query<TaskRow, [number]>("SELECT * FROM task WHERE workspace_id = ? ORDER BY created_at DESC").all(parsed.id).map(taskFromRow)
+  };
+}
+
 export function updateWorkspace(id: number, input: UpdateWorkspaceInput): Workspace {
   const patch = UpdateWorkspaceSchema.parse(input);
   return withDb((db) => {
@@ -466,14 +481,21 @@ export function getWorkspaceDetail(idOrSlug: string): { workspace: Workspace; re
     if (!workspace) {
       throw new Error("Workspace not found");
     }
-    const parsed = workspaceFromRow(workspace);
-    db.query("UPDATE workspace SET last_opened_at = ?, updated_at = ? WHERE id = ?").run(nowIso(), nowIso(), parsed.id);
-    return {
-      workspace: parsed,
-      repos: db.query<WorkspaceRepoRow, [number]>("SELECT * FROM workspace_repo WHERE workspace_id = ? ORDER BY is_primary DESC, id ASC").all(parsed.id).map(repoFromRow),
-      attachments: db.query<AttachmentRow, [number]>("SELECT * FROM attachment WHERE workspace_id = ? ORDER BY created_at DESC").all(parsed.id).map(attachmentFromRow),
-      tasks: db.query<TaskRow, [number]>("SELECT * FROM task WHERE workspace_id = ? ORDER BY created_at DESC").all(parsed.id).map(taskFromRow)
-    };
+    const detail = workspaceDetailFromRow(db, workspace);
+    db.query("UPDATE workspace SET last_opened_at = ?, updated_at = ? WHERE id = ?").run(nowIso(), nowIso(), detail.workspace.id);
+    return detail;
+  });
+}
+
+export function readWorkspaceDetail(idOrSlug: string): { workspace: Workspace; repos: WorkspaceRepo[]; attachments: WardAttachment[]; tasks: WardTask[] } {
+  return withDb((db) => {
+    const workspace = Number.isInteger(Number(idOrSlug))
+      ? db.query<WorkspaceRow, [number]>("SELECT * FROM workspace WHERE id = ?").get(Number(idOrSlug))
+      : db.query<WorkspaceRow, [string]>("SELECT * FROM workspace WHERE slug = ?").get(idOrSlug);
+    if (!workspace) {
+      throw new Error("Workspace not found");
+    }
+    return workspaceDetailFromRow(db, workspace);
   });
 }
 

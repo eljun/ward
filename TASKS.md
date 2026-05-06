@@ -2,10 +2,6 @@
 
 ## Planned
 
-- [ ] `9F` WARD as a Read-Only MCP Server
-  - Doc: [docs/task/009f-ward-mcp-server.md](docs/task/009f-ward-mcp-server.md)
-  - Goal: Expose WARD workspaces, sessions, plans, wiki, search, blockers, and status as read-only MCP tools over stdio.
-
 - [ ] `9G` Settings Connections UI
   - Doc: [docs/task/009g-connections-ui.md](docs/task/009g-connections-ui.md)
   - Goal: Add Settings -> Connections for scoped/effective MCP config, conflicts, server status, tool counts, and safe enable/disable.
@@ -27,9 +23,19 @@
 - [ ] `9` MCP Connections Layer
   - Doc: [docs/task/009-mcp-connections.md](docs/task/009-mcp-connections.md)
   - Goal: Three-scope MCP registry (global / workspace / repo, reuses `.mcp.json`); secrets via OS keychain; tool routing; autonomy-class policy; WARD-as-MCP-server.
-  - Current slice: 009E MCP tool proxy and circuit breakers.
+  - Current slice: 009F WARD as a read-only MCP server.
 
 ## Testing
+
+- [ ] `9F` WARD as a Read-Only MCP Server
+  - Doc: [docs/task/009f-ward-mcp-server.md](docs/task/009f-ward-mcp-server.md)
+  - Goal: Expose WARD workspaces, sessions, plans, wiki, search, blockers, and status as read-only MCP tools over stdio.
+
+- Task 009F `ward mcp-serve` responds to MCP `initialize`.
+- Task 009F `tools/list` returns only the ten read-only `ward.*` tools.
+- Task 009F unauthenticated non-status reads return a token-required denial.
+- Task 009F authenticated `ward.list_workspaces` returns workspace summaries.
+- Task 009F tokenless `ward.status` returns a synthetic status acknowledgement.
 
 - [ ] `9E` MCP Tool Proxy and Circuit Breakers
   - Doc: [docs/task/009e-mcp-tool-proxy-circuit-breakers.md](docs/task/009e-mcp-tool-proxy-circuit-breakers.md)
