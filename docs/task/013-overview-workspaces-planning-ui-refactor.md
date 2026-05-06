@@ -1,11 +1,18 @@
 # Task 013: Overview, Workspaces, and Planning UI Refactor
 
-- Status: `planned`
+- Status: `superseded`
+- Superseded by: [Task 015](015-dark-agent-first-ui-shell.md)
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `high`
 - Depends on: 008A, 005, 003, 006
 - Recommended Tier: `balanced`
+
+> **Note:** This task was planned before Task 015 redirected the UI
+> direction. Task 015 retires Overview as a primary view, moves
+> Workspaces / Planning behind the command palette, and introduces a
+> dark agent-first shell with a Settings modal. The patches it would
+> have applied to the old UI are no longer relevant. Kept for history.
 
 ## Overview
 
