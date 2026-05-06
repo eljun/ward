@@ -2,13 +2,13 @@
 
 ## Planned
 
-- [ ] `15` Dark Agent-First UI Shell with Live Updates
-  - Doc: [docs/task/015-dark-agent-first-ui-shell.md](docs/task/015-dark-agent-first-ui-shell.md)
-  - Goal: Replace the light cluttered home with a dark orb-centric shell. Settings becomes a glass modal with Standard / Advanced tabs; agents are grouped by role (Harness 1/2, Orchestrator, Stub) with the local-brain panel folded into the Orchestrator card. Add Cmd+K command palette and Cmd+L launch shortcut. Improve the orb (less Earth-like, plasma palette, atmosphere ring, TTS-reactive pulsing). Make every mutation propagate live without manual page refresh.
-
 - [ ] `16` Agentic Orb Conductor
   - Doc: [docs/task/016-agentic-orb-conductor.md](docs/task/016-agentic-orb-conductor.md)
   - Goal: Make the orb chat understand multi-step requests like "Add a task X for project Y and assign it to Claude Code" — parse intent into a structured plan, confirm with the user, execute through existing endpoints, stream progress back into the transcript, and report a final summary. Builds on 014 and 015.
+
+- [ ] `17` Richer + Configurable Orb Context
+  - Doc: [docs/task/017-configurable-orb-context.md](docs/task/017-configurable-orb-context.md)
+  - Goal: Stop generic orb replies by including specific state (active workspace name, top open tasks, recent sessions, today's date) in the system prompt, AND expose a Settings card where the user can override the system prompt, toggle which categories are injected, and budget the total token cost. Builds on 014 and 015.
 
 - [ ] `10` Inbound Remote Messaging
   - Doc: [docs/task/010-inbound-remote-messaging.md](docs/task/010-inbound-remote-messaging.md)
@@ -27,6 +27,10 @@
 _(none — pick the next planned task)_
 
 ## Testing
+
+- [ ] `15` Dark Agent-First UI Shell with Live Updates
+  - Doc: [docs/task/015-dark-agent-first-ui-shell.md](docs/task/015-dark-agent-first-ui-shell.md)
+  - Goal: Replace the light cluttered home with a dark orb-centric shell. Settings becomes a glass modal with Standard / Advanced tabs; agents are grouped by role (Harness 1/2, Orchestrator, Stub) with the local-brain panel folded into the Orchestrator card. Add Cmd+K command palette and Cmd+L launch shortcut. Improve the orb (less Earth-like, plasma palette, atmosphere ring, TTS-reactive pulsing). Make every mutation propagate live without manual page refresh.
 
 - [ ] `14` Conversational Orb Chat with a Local Brain
   - Doc: [docs/task/014-conversational-orb-chat-local-brain.md](docs/task/014-conversational-orb-chat-local-brain.md)

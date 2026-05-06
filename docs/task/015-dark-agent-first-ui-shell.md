@@ -351,4 +351,75 @@ No runtime, schema, or CLI changes. APIs already in place.
 
 ## Implementation Notes
 
-_To be filled in by the implementation stage._
+### What Changed
+
+- Body now defaults to `theme-dark`; styles.css has a Task 015 block defining dark
+  tokens, plasma palette accents, glass-modal / palette / agent-card / theme-options
+  styles, a refreshed top bar, an orb-stage stripped of narration, and a collapsible
+  transcript.
+- Top bar replaced: `⚡ WARD` monospace logo + workspace pill dropdown on the left,
+  refresh + settings icons on the right. The legacy left/right drawer triggers and
+  the gear-driven command menu were removed in favor of the new bar plus the Cmd+K
+  palette.
+- Home view is now orb + chat dock + collapsible transcript only — no narration
+  paragraph, stat strip, or drawer chrome by default.
+- `WardOrb` accepts `intensity` and `palette` props, uses an iridescent plasma
+  material, adds two atmosphere torus rings, an additive corona, and a 220-point
+  starfield. While `speechSynthesis` speaks, the orb visibly modulates emissive
+  intensity, scale, and ring opacity via a custom `ward:speech` event bus.
+- Settings is now a glass modal with Standard / Advanced tabs. Standard exposes the
+  Profile (name + voice + speak-replies) and Theme (Dark active; Light/System
+  disabled). Advanced groups brains by role — Harness 1 (claude-code-cli),
+  Harness 2 (codex-cli), Orchestrator (local-openai-compatible), Stub (stub-worker)
+  — each with an enabled toggle and a Configure expander. The local-brain probe
+  and test-reply controls are folded into the Orchestrator card. Routing collapses
+  behind a "Show routing" link; MCP shows enabled servers + an expandable Manage
+  section that exposes the existing scope tabs / refresh / doctor controls.
+- A Cmd+K command palette overlay ships with: Go to Sessions / Workspaces /
+  Memory / Planning / Overview, "Launch session…" (also bound to Cmd+L),
+  "New workspace…", per-workspace "Switch workspace to <slug>", "Open settings",
+  and "Refresh". Esc closes the palette and the modal.
+- Live updates: a `visibilitychange` listener triggers a debounced refresh of the
+  active surface, the SSE handler bubbles `session.state_changed` (terminal states)
+  and `worker.exit` to `refresh()` + `refreshSessionSurface()`, and a 30-s
+  visibility-gated `/api/overview` poll keeps brief counts fresh.
+- Cost Today / Quota Ledger render in the Advanced tab only when
+  `showAdvancedDashboards` is true, which is derived as
+  `brains.some(b => b.enabled && b.accounting !== "subscription")` per the spec.
+  Daily-brief narration and the Plan Mode nav slot stay in code but are no longer
+  rendered on the home view or in the top bar.
+- The transcript auto-scrolls to the latest turn whenever it grows or is opened.
+
+### Files Changed
+
+- `apps/ui/index.html` — body has `theme-dark`; preloads Inter / Space Grotesk /
+  JetBrains Mono.
+- `apps/ui/src/styles.css` — adds the Task 015 dark theme block (dark tokens,
+  glass modal, palette, agent cards, top bar, orb stage, transcript).
+- `apps/ui/src/components/WardOrb.tsx` — new `intensity` / `palette` props,
+  plasma material, atmosphere rings, particle field, TTS-reactive modulation.
+- `apps/ui/src/main.tsx` — new top bar, stripped home view, glass settings modal,
+  Cmd+K palette, Cmd+L launch shortcut, TTS-reactive orb intensity wiring,
+  visibility / SSE-bubble / 30 s overview poll, role-based agent cards with
+  the local-brain panel folded into the Orchestrator card.
+- `TASKS.md` — task 015 moved to In Progress and on to Testing.
+
+### Deviations From Plan
+
+- Fonts are loaded from Google Fonts with `<link rel="preload">` and
+  `<link rel="stylesheet">` tags rather than vendored locally. Vendoring can land
+  in a follow-up — the same family stack and weights are used either way and the
+  variables in CSS already gracefully fall back to system fonts.
+- `commandMenuOpen` state is left declared even though the legacy command menu is
+  gone; the existing `setCommandMenuOpen(false)` calls inside `openCommandPanel`
+  remain as harmless cleanup.
+- Light / System theme placeholders use buttons styled as radio options instead of
+  real `<input type="radio">` controls (they are disabled and informational).
+
+### Verification Run
+
+- `bun run typecheck` — PASS
+- `bun run build` — PASS (UI build + typecheck + dependency-cruiser + layer fixture)
+- `git diff --check` — PASS
+- `bun test` — SKIPPED (no test files in repo yet)
+- Manual UI smoke — DEFERRED to the test stage (requires running daemon).

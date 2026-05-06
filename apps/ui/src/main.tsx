@@ -2,7 +2,7 @@ import React, { FormEvent, useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { createRoot } from "react-dom/client";
-import { Boxes, BrainCircuit, ChevronDown, ChevronUp, Database, LayoutDashboard, Menu, Mic, PanelRight, RefreshCw, Send, Settings, Sparkles, Terminal as TerminalIcon, Waypoints, X } from "lucide-react";
+import { Boxes, BrainCircuit, ChevronDown, ChevronUp, Database, LayoutDashboard, Mic, RefreshCw, Send, Settings, Terminal as TerminalIcon, Waypoints, X } from "lucide-react";
 import { WardOrb } from "./components/WardOrb";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
@@ -845,11 +845,17 @@ function preferredVoice(name?: string | null): SpeechSynthesisVoice | null {
     ?? null;
 }
 
+function emitSpeechEvent(kind: "start" | "boundary" | "end", intensity: number) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent("ward:speech", { detail: { kind, intensity } }));
+}
+
 function speak(text: string, profile: Overview["profile"] | null) {
   if (!("speechSynthesis" in window)) {
     return;
   }
   window.speechSynthesis.cancel();
+  emitSpeechEvent("end", 0);
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.rate = profile?.tts_rate ?? 1;
   utterance.pitch = profile?.tts_pitch ?? 1;
@@ -857,6 +863,10 @@ function speak(text: string, profile: Overview["profile"] | null) {
   if (voice) {
     utterance.voice = voice;
   }
+  utterance.onstart = () => emitSpeechEvent("start", 0.55);
+  utterance.onboundary = () => emitSpeechEvent("boundary", 0.85);
+  utterance.onend = () => emitSpeechEvent("end", 0);
+  utterance.onerror = () => emitSpeechEvent("end", 0);
   window.speechSynthesis.speak(utterance);
 }
 
@@ -964,6 +974,18 @@ function App() {
   const [chatText, setChatText] = useState("");
   const [orbBusy, setOrbBusy] = useState(false);
   const [orbTurns, setOrbTurns] = useState<OrbChatTurn[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"standard" | "advanced">("standard");
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState("");
+  const [paletteIndex, setPaletteIndex] = useState(0);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const [agentExpanded, setAgentExpanded] = useState<Record<string, boolean>>({});
+  const [showRouting, setShowRouting] = useState(false);
+  const [mcpExpanded, setMcpExpanded] = useState(false);
+  const [orbIntensity, setOrbIntensity] = useState(0);
+  const transcriptRef = React.useRef<HTMLDivElement | null>(null);
 
   const selectedWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.slug === selectedSlug) ?? null,
@@ -971,6 +993,10 @@ function App() {
   );
   const enabledBrains = useMemo(
     () => brainRegistry.brains.filter((brain) => brain.enabled),
+    [brainRegistry.brains]
+  );
+  const showAdvancedDashboards = useMemo(
+    () => brainRegistry.brains.some((brain) => brain.enabled && brain.accounting !== "subscription"),
     [brainRegistry.brains]
   );
   const selectedSession = sessionDetail?.session ?? null;
@@ -1340,6 +1366,18 @@ function App() {
             : current.pty_output
         };
       });
+
+      // Cross-surface bubble: nudge workspace list and overview counts when sessions change state.
+      if (parsed.event_type === "session.state_changed") {
+        const payload = parsed.payload as { to_state?: string };
+        if (payload?.to_state && ["done", "failed", "blocked", "canceled"].includes(payload.to_state)) {
+          refreshSessionSurface(selectedSlug, selectedSessionId).catch(() => undefined);
+          refresh().catch(() => undefined);
+        }
+      } else if (parsed.event_type === "worker.exit") {
+        refreshSessionSurface(selectedSlug, selectedSessionId).catch(() => undefined);
+        refresh().catch(() => undefined);
+      }
     };
     for (const name of eventNames) {
       source.addEventListener(name, handler);
@@ -1347,6 +1385,111 @@ function App() {
     source.onerror = () => source.close();
     return () => source.close();
   }, [selectedSessionId]);
+
+  // TTS-reactive orb: subscribe to ward:speech custom events.
+  useEffect(() => {
+    let decay = 0;
+    const onSpeech = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { kind: string; intensity: number };
+      if (detail.kind === "end") {
+        setOrbIntensity(0);
+        decay = 0;
+      } else {
+        decay = detail.intensity;
+        setOrbIntensity(detail.intensity);
+      }
+    };
+    window.addEventListener("ward:speech", onSpeech);
+    const ticker = window.setInterval(() => {
+      decay = Math.max(0, decay * 0.86);
+      setOrbIntensity((prev) => (prev > decay ? Math.max(decay, prev * 0.88) : prev));
+    }, 90);
+    return () => {
+      window.removeEventListener("ward:speech", onSpeech);
+      window.clearInterval(ticker);
+    };
+  }, []);
+
+  // Keyboard shortcuts: Cmd/Ctrl+K palette, Cmd/Ctrl+L launch session, Esc closes overlays.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const meta = event.metaKey || event.ctrlKey;
+      if (meta && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+        setPaletteQuery("");
+        setPaletteIndex(0);
+        return;
+      }
+      if (meta && event.key.toLowerCase() === "l") {
+        event.preventDefault();
+        if (!selectedWorkspace || enabledBrains.length === 0) {
+          setError(selectedWorkspace ? "No brains enabled — check Settings → Advanced." : "Select a workspace first.");
+          return;
+        }
+        setLaunchTaskId("");
+        setLaunchGoal("");
+        setSessionLaunchOpen(true);
+        return;
+      }
+      if (event.key === "Escape") {
+        if (paletteOpen) {
+          setPaletteOpen(false);
+          return;
+        }
+        if (settingsOpen) {
+          setSettingsOpen(false);
+          return;
+        }
+        if (workspaceMenuOpen) {
+          setWorkspaceMenuOpen(false);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [paletteOpen, settingsOpen, workspaceMenuOpen, selectedWorkspace, enabledBrains.length]);
+
+  // Visibility-aware refresh: when the tab becomes visible again, refresh the active surface.
+  useEffect(() => {
+    let timer: number | null = null;
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        refresh().catch(() => undefined);
+        if (selectedSlug) {
+          refreshDetail(selectedSlug).catch(() => undefined);
+          refreshSessionSurface(selectedSlug).catch(() => undefined);
+          refreshPlanSurface(selectedSlug).catch(() => undefined);
+        }
+      }, 120);
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [selectedSlug]);
+
+  // Auto-scroll the transcript to the latest turn whenever it grows.
+  useEffect(() => {
+    if (!transcriptOpen) return;
+    const node = transcriptRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+  }, [orbTurns.length, transcriptOpen]);
+
+  // Gentle 30-s overview poll, visibility-gated.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      api<{ overview: Overview }>("/api/overview")
+        .then((res) => setOverview(res.overview))
+        .catch(() => undefined);
+    }, 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1967,6 +2110,19 @@ function App() {
   }
 
   function openCommandPanel(view: CommandView) {
+    if (view === "settings") {
+      setSettingsOpen(true);
+      setSettingsTab("standard");
+      setCommandMenuOpen(false);
+      return;
+    }
+    if (view === "sessions") {
+      setActiveView("sessions");
+      setSessionsOpen(true);
+      setRightPanelOpen(false);
+      setCommandMenuOpen(false);
+      return;
+    }
     setActiveView(view);
     setRightPanelOpen(true);
     setSessionsOpen(false);
@@ -1979,6 +2135,10 @@ function App() {
 
   function applyOrbSurface(surface: CommandView | undefined) {
     if (!surface) return;
+    if (surface === "settings") {
+      setSettingsOpen(true);
+      return;
+    }
     if (surface === "sessions") {
       setActiveView("sessions");
       setSessionsOpen(true);
@@ -2132,8 +2292,7 @@ function App() {
     { id: "workspaces", label: "Workspaces", meta: String(workspaces.length), icon: Boxes },
     { id: "planning", label: "Planning", meta: String(plans.length), icon: Waypoints },
     { id: "sessions", label: "Sessions", meta: String(sessions.length), icon: BrainCircuit },
-    { id: "memory", label: "Memory", meta: String(wikiPages.length), icon: Database },
-    { id: "settings", label: "Settings", meta: profile?.display_name ?? "profile", icon: Settings }
+    { id: "memory", label: "Memory", meta: String(wikiPages.length), icon: Database }
   ];
   const activeCommand = commandTabs.find((tab) => tab.id === activeView) ?? commandTabs[0];
   const latestOrbReply = [...orbTurns].reverse().find((turn) => turn.role === "ward")?.text;
@@ -2148,44 +2307,74 @@ function App() {
     <main className="orb-shell">
       <div className="orb-background" aria-hidden="true" />
       <header className="orb-topbar">
-        <Button className="orb-icon-button" size="icon" type="button" variant="secondary" onClick={() => {
-          if (activeView === "sessions" && sessionsOpen) {
-            setSessionsOpen(false);
-            return;
-          }
-          setActiveView("sessions");
-          setSessionsOpen(true);
-          setRightPanelOpen(false);
-          setCommandMenuOpen(false);
-        }} aria-label="Toggle sessions">
-          {sessionsOpen ? <X className="size-4" /> : <Menu className="size-4" />}
-        </Button>
-        <div className="orb-brand">
-          <p><Sparkles className="size-3.5" /> WARD</p>
+        <div className="orb-topbar-left">
+          <p className="ward-logo"><span className="bolt">⚡</span> WARD</p>
+          <div className="orb-menu-wrap-inner">
+            <button
+              type="button"
+              className="workspace-pill"
+              onClick={() => setWorkspaceMenuOpen((open) => !open)}
+              aria-haspopup="menu"
+              aria-expanded={workspaceMenuOpen}
+            >
+              <span>{selectedWorkspace?.slug ?? (workspaces[0]?.slug ?? "no workspace")}</span>
+              <span className="chev">▼</span>
+            </button>
+            {workspaceMenuOpen ? (
+              <div className="workspace-menu" role="menu">
+                {workspaces.map((workspace) => (
+                  <button
+                    key={workspace.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedSlug(workspace.slug);
+                      setWorkspaceMenuOpen(false);
+                    }}
+                  >
+                    <span>{workspace.name}</span>
+                    {workspace.slug === selectedSlug ? <span className="active-mark">●</span> : null}
+                  </button>
+                ))}
+                {workspaces.length > 0 ? <div className="menu-sep" /> : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWorkspaceMenuOpen(false);
+                    setNewWorkspaceOpen(true);
+                  }}
+                >
+                  <span>+ New workspace</span>
+                </button>
+              </div>
+            ) : null}
+          </div>
         </div>
-        <div className="orb-menu-wrap">
-          <Button className="orb-icon-button" size="icon" type="button" variant="secondary" onClick={() => setCommandMenuOpen((value) => !value)} aria-label="Open command menu">
+        <div className="orb-topbar-right">
+          <Button
+            className="orb-icon-button"
+            size="icon"
+            type="button"
+            variant="secondary"
+            onClick={() => refresh().then(() => Promise.all([refreshPlanSurface(), refreshSessionSurface()])).catch((err) => setError(err.message))}
+            aria-label="Refresh data"
+            title="Refresh"
+          >
+            <RefreshCw className="size-4" />
+          </Button>
+          <Button
+            className="orb-icon-button"
+            size="icon"
+            type="button"
+            variant="secondary"
+            onClick={() => {
+              setSettingsOpen(true);
+              setSettingsTab("standard");
+            }}
+            aria-label="Open settings"
+            title="Settings"
+          >
             <Settings className="size-4" />
           </Button>
-          {commandMenuOpen ? (
-            <div className="command-menu">
-              {commandTabs.filter((tab) => tab.id !== "sessions").map((tab) => {
-                const Icon = tab.icon;
-                return (
-                  <button key={tab.id} type="button" onClick={() => openCommandPanel(tab.id)}>
-                    <Icon className="size-4" />
-                    <span>{tab.label}</span>
-                    <small>{tab.meta}</small>
-                  </button>
-                );
-              })}
-              <button type="button" onClick={() => refresh().then(() => Promise.all([refreshPlanSurface(), refreshSessionSurface()])).catch((err) => setError(err.message))}>
-                <RefreshCw className="size-4" />
-                <span>Refresh</span>
-                <small>sync</small>
-              </button>
-            </div>
-          ) : null}
         </div>
       </header>
 
@@ -2193,41 +2382,49 @@ function App() {
       {message && <p className="banner">{message}</p>}
 
       <section className="orb-stage">
-        <div className="orb-title">
-          <h5>WARD</h5>
-          <p>{overview?.brief.narration ?? "WARD is preparing your brief."}</p>
-        </div>
-        <WardOrb pulseKey={orbPulse} />
+        <WardOrb pulseKey={orbPulse} intensity={orbIntensity} palette="ai" />
         <form className="orb-dock" onSubmit={(event) => submitOrbChat(event).catch((err) => setError(err.message))}>
           <Button className="speak-cta" type="button" onClick={() => {
             pulseOrb();
-            overview && speak(latestOrbReply ?? overview.brief.narration, overview.profile);
+            overview && speak(latestOrbReply ?? overview.brief.greeting ?? "WARD ready.", overview.profile);
           }}>
             <Mic className="size-5" />
             Speak
           </Button>
-          <input value={chatText} onChange={(event) => setChatText(event.target.value)} placeholder="Ask WARD..." disabled={orbBusy} />
+          <input value={chatText} onChange={(event) => setChatText(event.target.value)} placeholder="Send a message…" disabled={orbBusy} />
           <Button size="icon" type="submit" aria-label="Send to WARD" disabled={orbBusy}>
             <Send className="size-4" />
           </Button>
         </form>
         {orbTurns.length ? (
-          <div className="orb-transcript">
-            {orbTurns.slice(-4).map((turn, idx, list) => {
-              const isLastWard = idx === list.length - 1 && turn.role === "ward";
-              const showTyping = isLastWard && orbBusy && turn.text.length === 0;
-              return (
-                <div className={turn.role === "ward" ? "ward" : "user"} key={turn.id}>
-                  <span>{turn.role === "ward" ? "WARD" : "You"}</span>
-                  {showTyping ? (
-                    <p className="orb-typing"><span /><span /><span /></p>
-                  ) : (
-                    <p>{turn.text}</p>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+          <>
+            <button
+              type="button"
+              className="orb-transcript-toggle"
+              onClick={() => setTranscriptOpen((open) => !open)}
+              aria-expanded={transcriptOpen}
+            >
+              {transcriptOpen ? "Hide transcript" : `Show transcript (${orbTurns.length})`}
+            </button>
+            {transcriptOpen ? (
+              <div className="orb-transcript" ref={transcriptRef}>
+                {orbTurns.slice(-12).map((turn, idx, list) => {
+                  const isLastWard = idx === list.length - 1 && turn.role === "ward";
+                  const showTyping = isLastWard && orbBusy && turn.text.length === 0;
+                  return (
+                    <div className={turn.role === "ward" ? "ward" : "user"} key={turn.id}>
+                      <span>{turn.role === "ward" ? "WARD" : "You"}</span>
+                      {showTyping ? (
+                        <p className="orb-typing"><span /><span /><span /></p>
+                      ) : (
+                        <p>{turn.text}</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </>
         ) : null}
       </section>
 
@@ -2314,395 +2511,6 @@ function App() {
                 <span>{handoff.handoff}</span>
               </div>
             ))}
-          </div>
-        </section>
-      </section> : null}
-
-      {activeView === "settings" ? <section className="settings-grid">
-        <form className="panel profile-panel" key={profile ? `${profile.display_name}-${profile.tts_voice ?? ""}-${voices.length}` : "profile-loading"} onSubmit={saveProfile}>
-          <div className="panel-title">
-            <h2>Profile</h2>
-            <span>{profile?.display_name ? "ready" : "first run"}</span>
-          </div>
-          <label>
-            Name
-            <input name="display_name" defaultValue={profile?.display_name ?? ""} required />
-          </label>
-          <label>
-            Timezone
-            <input name="timezone" defaultValue={profile?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone} />
-          </label>
-          <div className="row">
-            <label>
-              Tone
-              <select name="persona_tone" defaultValue={profile?.persona_tone ?? "casual"}>
-                <option value="casual">Casual</option>
-                <option value="formal">Formal</option>
-              </select>
-            </label>
-            <label>
-              Presence
-              <select name="presence_default" defaultValue={profile?.presence_default ?? "present"}>
-                <option value="present">Present</option>
-                <option value="away">Away</option>
-                <option value="dnd">DND</option>
-              </select>
-            </label>
-          </div>
-          <label className="check-row">
-            <input name="tts_enabled" type="checkbox" defaultChecked={profile?.tts_enabled ?? false} />
-            TTS
-          </label>
-          <div className="tts-grid">
-            <label>
-              Voice
-              <select name="tts_voice" defaultValue={profile?.tts_voice ?? ""}>
-                <option value="">System best</option>
-                {voices.map((voice) => (
-                  <option key={`${voice.name}-${voice.lang}`} value={voice.name}>
-                    {voice.name} · {voice.lang}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Rate
-              <input name="tts_rate" type="number" min="0.6" max="1.4" step="0.05" defaultValue={profile?.tts_rate ?? 1} />
-            </label>
-            <label>
-              Pitch
-              <input name="tts_pitch" type="number" min="0.7" max="1.3" step="0.05" defaultValue={profile?.tts_pitch ?? 1} />
-            </label>
-          </div>
-          <button type="submit">Save</button>
-        </form>
-
-        <section className="panel connections-panel">
-          <div className="panel-title">
-            <h2>Connections</h2>
-            <span>{mcpEffective?.workspace_slug ?? selectedWorkspace?.slug ?? "global"}</span>
-          </div>
-          <div className="connection-summary">
-            <div>
-              <strong>{mcpSummary.enabled}</strong>
-              <span>enabled</span>
-            </div>
-            <div>
-              <strong>{mcpSummary.ok}</strong>
-              <span>healthy</span>
-            </div>
-            <div>
-              <strong>{mcpSummary.tools}</strong>
-              <span>tools</span>
-            </div>
-            <div>
-              <strong>{mcpSummary.conflicts}</strong>
-              <span>conflicts</span>
-            </div>
-          </div>
-          <div className="connection-toolbar">
-            <div className="connection-tabs" role="tablist" aria-label="MCP connection scopes">
-              {mcpScopeTabs.map((tab) => (
-                <button
-                  aria-pressed={mcpScopeView === tab.id}
-                  disabled={tab.disabled}
-                  key={tab.id}
-                  onClick={() => setMcpScopeView(tab.id)}
-                  type="button"
-                >
-                  <strong>{tab.label}</strong>
-                  <span>{tab.meta}</span>
-                </button>
-              ))}
-            </div>
-            <div className="connection-buttons">
-              <button type="button" disabled={Boolean(mcpBusy)} onClick={() => refreshConnections(selectedSlug).catch((err) => setError(err.message))}>
-                <RefreshCw className="size-4" />
-                Refresh
-              </button>
-              <button type="button" disabled={Boolean(mcpBusy)} onClick={() => runMcpDoctor().catch((err) => setError(err.message))}>
-                <Waypoints className="size-4" />
-                Doctor
-              </button>
-            </div>
-          </div>
-          <input
-            aria-label="Search MCP connections"
-            className="connection-search"
-            onChange={(event) => setMcpQuery(event.target.value)}
-            placeholder="Search servers, status, capability, tool"
-            value={mcpQuery}
-          />
-          {mcpScopeView !== "effective" ? (
-            <div className="connection-path">
-              <strong>{titleCase(mcpScopeView)} config</strong>
-              <span>{mcpScopes[mcpScopeView]?.path ?? (mcpScopeView === "repo" ? "No linked repo config found." : "No workspace selected.")}</span>
-            </div>
-          ) : null}
-          {mcpEffective && mcpEffective.conflicts.length > 0 ? (
-            <div className="connection-conflicts">
-              {mcpEffective.conflicts.map((conflict) => (
-                <div key={`${conflict.server_id}-${conflict.winner.path}-${conflict.shadowed.path}`}>
-                  <strong>{conflict.server_id}</strong>
-                  <span>{conflict.reason} · {conflict.winner.scope} wins</span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <div className="connection-list">
-            {filteredMcpServers.map((server) => {
-              const status = mcpStatusByKey.get(`${server.id}:${server.origin.path}`) ?? mcpStatusByKey.get(server.id);
-              const enabled = mcpEnabled(server.config);
-              const scopes = server.config.ward_tool_scopes?.length ? server.config.ward_tool_scopes : ["read"];
-              const capabilities = server.config.ward_capability_profiles ?? [];
-              const toggleBusy = mcpBusy === `toggle:${server.origin.scope}:${server.id}`;
-              return (
-                <div className={enabled ? "connection-row active" : "connection-row"} key={`${server.id}-${server.origin.scope}-${server.origin.path}`}>
-                  <div className="connection-row-head">
-                    <div>
-                      <strong>{server.id}</strong>
-                      <span>{server.origin.scope} · {mcpTransportSummary(server.config)}</span>
-                    </div>
-                    <div className="connection-row-badges">
-                      <Badge tone={enabled ? "success" : "default"}>{enabled ? "enabled" : "off"}</Badge>
-                      <Badge tone={mcpStatusTone(status?.status)}>{mcpStatusLabel(status)}</Badge>
-                    </div>
-                  </div>
-                  <div className="connection-meta">
-                    <span>{server.config.transport ?? (server.config.url ? "http" : "stdio")}</span>
-                    <span>{status ? `${status.tool_count} tools` : "doctor pending"}</span>
-                    <span>{status ? formatDuration(status.duration_ms) : "not checked"}</span>
-                    {server.origin.primary_repo ? <span>primary repo</span> : null}
-                  </div>
-                  <div className="connection-tags">
-                    {scopes.map((scope) => <span key={`${server.id}-scope-${scope}`}>{scope}</span>)}
-                    {capabilities.map((capability) => <span key={`${server.id}-cap-${capability}`}>{capability}</span>)}
-                    {capabilities.length === 0 ? <span>no profile</span> : null}
-                  </div>
-                  <div className="connection-origin">{server.origin.path}</div>
-                  {status?.tools.length ? (
-                    <div className="connection-tools">
-                      {status.tools.slice(0, 5).map((tool) => <span key={`${server.id}-tool-${tool.name}`}>{tool.name}</span>)}
-                      {status.tools.length > 5 ? <span>+{status.tools.length - 5}</span> : null}
-                    </div>
-                  ) : null}
-                  {server.conflicts.length > 0 ? (
-                    <div className="connection-warning">{server.conflicts.length} conflict{server.conflicts.length === 1 ? "" : "s"} shadowed by {server.origin.scope}</div>
-                  ) : null}
-                  {status?.error ? <div className="connection-error">{status.error}</div> : null}
-                  <div className="connection-row-actions">
-                    <span>redacted config</span>
-                    <button
-                      disabled={!server.editable || toggleBusy}
-                      onClick={() => toggleMcpServer(server, !enabled).catch((err) => setError(err.message))}
-                      type="button"
-                    >
-                      {server.editable ? toggleBusy ? "Saving..." : enabled ? "Disable" : "Enable" : "Read Only"}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-            {filteredMcpServers.length === 0 ? (
-              <p className="empty-copy">{mcpQuery ? "No connections match that filter." : "No MCP servers configured for this view yet."}</p>
-            ) : null}
-          </div>
-          {mcpDoctor ? (
-            <div className="connection-doctor">
-              <strong>Last doctor</strong>
-              <span>{mcpDoctor.summary.passed} ok · {mcpDoctor.summary.failed} failed · {mcpDoctor.summary.skipped} skipped</span>
-            </div>
-          ) : null}
-        </section>
-
-        <section className="panel local-brain-panel">
-          <div className="panel-title">
-            <h2>Local brain (orb chat)</h2>
-            <span>{localBrainProbe?.reachable ? "reachable" : localBrainProbe ? "unreachable" : "untested"}</span>
-          </div>
-          <p className="hint">
-            Powers the orb conversation. Configured brain: <code>local-openai-compatible</code> at <code>{localBrainProbe?.base_url ?? "http://127.0.0.1:11434/v1"}</code> · model <code>{localBrainProbe?.model ?? "gemma4:e2b"}</code>.
-          </p>
-          <div className="local-brain-row">
-            <button type="button" disabled={localBrainBusy !== ""} onClick={() => runLocalBrainProbe().catch((err) => setError(err.message))}>
-              {localBrainBusy === "probe" ? "Probing…" : "Probe"}
-            </button>
-            <button type="button" disabled={localBrainBusy !== ""} onClick={() => runLocalBrainTest().catch((err) => setError(err.message))}>
-              {localBrainBusy === "test" ? "Testing…" : "Test reply"}
-            </button>
-            {localBrainProbe ? (
-              <span className="hint">
-                {localBrainProbe.reachable ? "✓ reachable" : "× unreachable"}
-                {typeof localBrainProbe.latency_ms === "number" ? ` · ${localBrainProbe.latency_ms} ms` : ""}
-                {localBrainProbe.reachable ? (localBrainProbe.model_present ? " · model present" : " · model not pulled") : ""}
-              </span>
-            ) : null}
-          </div>
-          {localBrainProbe && !localBrainProbe.reachable ? (
-            <div className="welcome-card subtle">
-              <p>
-                <strong>Ollama not reachable.</strong> Start it with <code>ollama serve</code> and pull the model with <code>ollama pull gemma4:e2b</code>.
-              </p>
-              {localBrainProbe.error ? <p className="hint">Detail: {localBrainProbe.error}</p> : null}
-            </div>
-          ) : null}
-          {localBrainProbe && localBrainProbe.reachable && !localBrainProbe.model_present ? (
-            <div className="welcome-card subtle">
-              <p>
-                Server reachable but <code>{localBrainProbe.model ?? "gemma4:e2b"}</code> isn't pulled. Run <code>ollama pull {localBrainProbe.model ?? "gemma4:e2b"}</code>.
-              </p>
-              {localBrainProbe.models && localBrainProbe.models.length > 0 ? (
-                <p className="hint">Models pulled: {localBrainProbe.models.slice(0, 6).join(", ")}{localBrainProbe.models.length > 6 ? "…" : ""}</p>
-              ) : null}
-            </div>
-          ) : null}
-          {localBrainTest?.reply ? (
-            <div className="moderator">
-              <strong>Test reply</strong>
-              <p>{localBrainTest.reply}</p>
-              {typeof localBrainTest.latency_ms === "number" ? <small className="hint">{localBrainTest.latency_ms} ms</small> : null}
-            </div>
-          ) : null}
-          {localBrainTest?.error ? (
-            <p className="hint" style={{ color: "#b13a3a" }}>Test failed: {localBrainTest.error}</p>
-          ) : null}
-        </section>
-
-        <section className="panel brains-panel">
-          <div className="panel-title">
-            <h2>Brains</h2>
-            <span>{enabledBrains.length}/{brainRegistry.brains.length} enabled</span>
-          </div>
-          <div className="brain-dashboard">
-            {brainRegistry.brains.map((brain) => {
-              const cost = costByBrain.get(brain.id);
-              const forecast = forecastByBrain.get(brain.id);
-              const budget = budgetByBrain.get(brain.id);
-              return (
-                <div className={brain.enabled ? "brain-control active" : "brain-control"} key={brain.id}>
-                  <div className="brain-control-head">
-                    <div>
-                      <strong>{brainDisplayName(brain)}</strong>
-                      <span>{brain.id}</span>
-                    </div>
-                    <Badge tone={brain.enabled ? "success" : "default"}>{brain.enabled ? "enabled" : "off"}</Badge>
-                  </div>
-                  <div className="brain-facts">
-                    <span>{runtimeLabel(brain.runtime)}</span>
-                    <span>{authLabel(brain.auth)}</span>
-                    <span>{accountingLabel(brain.accounting)}</span>
-                    <span>{brain.concurrency_cap} cap</span>
-                  </div>
-                  <div className="brain-tags">
-                    {(brain.tags.length ? brain.tags : [brain.source]).slice(0, 4).map((tag) => <span key={tag}>{tag}</span>)}
-                  </div>
-                  <div className="brain-cost-line">
-                    <span>{cost?.invocations ?? 0} calls</span>
-                    <span>{formatDuration(cost?.duration_ms ?? 0)}</span>
-                    <span>{formatDollars(cost?.dollars_estimate ?? 0)}</span>
-                    <span>{forecast ? `${forecast.status} ${formatMetric(forecast.current, forecast.metric)}` : "forecast pending"}</span>
-                    <span>{budget?.allowed === false ? `over ${budget.exceeded.map(titleCase).join(" + ")}` : "within budget"}</span>
-                  </div>
-                  <form className="budget-form" key={`${brain.id}-${budget?.limits.daily_invocations ?? "none"}-${budget?.limits.daily_dollars ?? "none"}`} onSubmit={(event) => saveBrainBudget(event, brain.id).catch((err) => setError(err.message))}>
-                    <label>
-                      Daily calls
-                      <input name="daily_invocations" type="number" min="1" step="1" placeholder="no cap" defaultValue={budget?.limits.daily_invocations ?? ""} />
-                    </label>
-                    <label>
-                      Daily $
-                      <input name="daily_dollars" type="number" min="0.0001" step="0.0001" placeholder="no cap" defaultValue={budget?.limits.daily_dollars ?? ""} />
-                    </label>
-                    <button type="submit" disabled={brainBusy === `budget:${brain.id}`}>
-                      {brainBusy === `budget:${brain.id}` ? "Saving..." : "Save Caps"}
-                    </button>
-                  </form>
-                  <button
-                    type="button"
-                    disabled={brainBusy === `brain:${brain.id}`}
-                    onClick={() => toggleBrain(brain.id, !brain.enabled).catch((err) => setError(err.message))}
-                  >
-                    {brainBusy === `brain:${brain.id}` ? "Saving..." : brain.enabled ? "Disable" : "Enable"}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="panel routes-panel">
-          <div className="panel-title">
-            <h2>Routing</h2>
-            <span>{brainRegistry.routing.length}</span>
-          </div>
-          <div className="route-list">
-            {brainRegistry.routing.map((route) => (
-              <form className="route-row" key={`${route.concern}-${route.updated_at}`} onSubmit={(event) => saveBrainRoute(event, route.concern).catch((err) => setError(err.message))}>
-                <div>
-                  <strong>{titleCase(route.concern)}</strong>
-                  <span>{route.brain_ids.map((brainId) => brainDisplayName(brainById.get(brainId), brainId)).join(" + ")}</span>
-                </div>
-                <select name="brain_ids" multiple defaultValue={route.brain_ids} size={Math.min(4, Math.max(2, brainRegistry.brains.length))}>
-                  {brainRegistry.brains.map((brain) => (
-                    <option key={brain.id} value={brain.id}>
-                      {brainDisplayName(brain)} · {runtimeLabel(brain.runtime)}
-                    </option>
-                  ))}
-                </select>
-                <button type="submit" disabled={brainBusy === `route:${route.concern}`}>
-                  {brainBusy === `route:${route.concern}` ? "Saving..." : "Save"}
-                </button>
-              </form>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel cost-panel">
-          <div className="panel-title">
-            <h2>Cost Today</h2>
-            <span>{costSummary?.date ?? "today"}</span>
-          </div>
-          <div className="cost-metrics">
-            <div>
-              <strong>{costSummary?.totals.invocations ?? 0}</strong>
-              <span>calls</span>
-            </div>
-            <div>
-              <strong>{formatDuration(costSummary?.totals.duration_ms ?? 0)}</strong>
-              <span>duration</span>
-            </div>
-            <div>
-              <strong>{(costSummary?.totals.tokens_in ?? 0) + (costSummary?.totals.tokens_out ?? 0)}</strong>
-              <span>tokens</span>
-            </div>
-            <div>
-              <strong>{formatDollars(costSummary?.totals.dollars_estimate ?? 0)}</strong>
-              <span>estimate</span>
-            </div>
-          </div>
-          <div className="cost-list">
-            {(costSummary?.by_brain ?? []).map((row) => (
-              <div className="cost-row" key={`${row.brain_id}-${row.accounting_mode}`}>
-                <strong>{brainDisplayName(brainById.get(row.brain_id), row.brain_id)}</strong>
-                <span>{row.invocations} calls · {formatDuration(row.duration_ms)} · {formatDollars(row.dollars_estimate)}</span>
-              </div>
-            ))}
-            {costSummary && costSummary.by_brain.length === 0 ? <p className="empty-copy">No brain calls recorded today.</p> : null}
-          </div>
-        </section>
-
-        <section className="panel quota-panel">
-          <div className="panel-title">
-            <h2>Quota Ledger</h2>
-            <span>{quotaLedger.length}</span>
-          </div>
-          <div className="quota-list">
-            {quotaLedger.map((entry) => (
-              <div className="quota-row" key={entry.id}>
-                <strong>{entry.policy_id}</strong>
-                <span>{entry.target} · {entry.metric} · {formatMetric(entry.amount, entry.metric)}</span>
-              </div>
-            ))}
-            {quotaLedger.length === 0 ? <p className="empty-copy">Quota events will appear after brain calls.</p> : null}
           </div>
         </section>
       </section> : null}
@@ -3314,6 +3122,423 @@ function App() {
           </div>
         </div>
       ) : null}
+
+      {settingsOpen ? (
+        <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}>
+          <div className="glass-modal" onClick={(event) => event.stopPropagation()} role="dialog" aria-label="Settings">
+            <div className="glass-modal-header">
+              <h2>Settings</h2>
+              <Button size="icon" type="button" variant="ghost" onClick={() => setSettingsOpen(false)} aria-label="Close settings">
+                <X className="size-4" />
+              </Button>
+            </div>
+            <div className="glass-modal-tabs" role="tablist">
+              <button type="button" role="tab" className={settingsTab === "standard" ? "active" : ""} onClick={() => setSettingsTab("standard")}>Standard</button>
+              <button type="button" role="tab" className={settingsTab === "advanced" ? "active" : ""} onClick={() => setSettingsTab("advanced")}>Advanced</button>
+            </div>
+            <div className="glass-modal-body">
+              {settingsTab === "standard" ? (
+                <>
+                  <form
+                    className="glass-card"
+                    key={profile ? `${profile.display_name}-${profile.tts_voice ?? ""}-${voices.length}` : "profile-loading"}
+                    onSubmit={saveProfile}
+                  >
+                    <h3>Profile</h3>
+                    <label>
+                      Name
+                      <input
+                        name="display_name"
+                        defaultValue={profile?.display_name ?? ""}
+                        required
+                        onBlur={(event) => {
+                          if ((event.currentTarget.form?.elements.namedItem("display_name") as HTMLInputElement | null)?.value !== profile?.display_name) {
+                            event.currentTarget.form?.requestSubmit();
+                          }
+                        }}
+                      />
+                    </label>
+                    <div className="agent-configure field-row">
+                      <label>
+                        Voice
+                        <select name="tts_voice" defaultValue={profile?.tts_voice ?? ""} onChange={(event) => event.currentTarget.form?.requestSubmit()}>
+                          <option value="">System best</option>
+                          {voices.map((voice) => (
+                            <option key={`${voice.name}-${voice.lang}`} value={voice.name}>
+                              {voice.name} · {voice.lang}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => overview && speak("WARD voice test.", overview.profile)}
+                        disabled={!overview}
+                      >
+                        ▶ Test voice
+                      </Button>
+                    </div>
+                    <label className="check-row">
+                      <input
+                        name="tts_enabled"
+                        type="checkbox"
+                        defaultChecked={profile?.tts_enabled ?? false}
+                        onChange={(event) => event.currentTarget.form?.requestSubmit()}
+                      />
+                      Speak replies
+                    </label>
+                    {/* Hidden advanced profile controls — kept for future restoration */}
+                    <input type="hidden" name="timezone" defaultValue={profile?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone} />
+                    <input type="hidden" name="persona_tone" defaultValue={profile?.persona_tone ?? "casual"} />
+                    <input type="hidden" name="presence_default" defaultValue={profile?.presence_default ?? "present"} />
+                    <input type="hidden" name="tts_rate" defaultValue={profile?.tts_rate ?? 1} />
+                    <input type="hidden" name="tts_pitch" defaultValue={profile?.tts_pitch ?? 1} />
+                    <button type="submit" style={{ display: "none" }}>Save</button>
+                  </form>
+
+                  <div className="glass-card">
+                    <h3>Theme</h3>
+                    <div className="theme-options">
+                      <button type="button" className="theme-option active" aria-pressed="true">
+                        <strong>◉ Dark</strong>
+                        <small>active</small>
+                      </button>
+                      <button type="button" className="theme-option" disabled>
+                        <strong>◯ Light</strong>
+                        <small>coming soon</small>
+                      </button>
+                      <button type="button" className="theme-option" disabled>
+                        <strong>◯ System</strong>
+                        <small>coming soon</small>
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* Agents grouped by role */}
+                  {([
+                    { role: "Harness 1", id: "claude-code-cli", icon: "H1" },
+                    { role: "Harness 2", id: "codex-cli", icon: "H2" },
+                    { role: "Orchestrator", id: "local-openai-compatible", icon: "OR" },
+                    { role: "Stub (test only)", id: "stub-worker", icon: "ST" }
+                  ] as const).map((slot) => {
+                    const brain = brainById.get(slot.id);
+                    if (!brain) return null;
+                    const isExpanded = !!agentExpanded[slot.id];
+                    const isOrchestrator = slot.id === "local-openai-compatible";
+                    const budget = budgetByBrain.get(brain.id);
+                    return (
+                      <div className={brain.enabled ? "agent-card" : "agent-card disabled"} key={slot.id}>
+                        <div className="agent-card-head">
+                          <div className="agent-card-icon">{slot.icon}</div>
+                          <div className="agent-card-title">
+                            <strong>{slot.role} — {brainDisplayName(brain)}</strong>
+                            <span>{brain.id} · {runtimeLabel(brain.runtime)} · {accountingLabel(brain.accounting)}</span>
+                          </div>
+                          <div className="agent-card-actions">
+                            <button
+                              type="button"
+                              className={`agent-toggle ${brain.enabled ? "on" : ""}`}
+                              aria-pressed={brain.enabled}
+                              aria-label={`Toggle ${brain.id}`}
+                              disabled={brainBusy === `brain:${brain.id}`}
+                              onClick={() => toggleBrain(brain.id, !brain.enabled).catch((err) => setError(err.message))}
+                            />
+                          </div>
+                        </div>
+                        <div className="agent-meta">
+                          <span>{authLabel(brain.auth)}</span>
+                          <span>{brain.concurrency_cap} cap</span>
+                          {(brain.tags.length ? brain.tags : [brain.source]).slice(0, 3).map((tag) => <span key={tag}>{tag}</span>)}
+                        </div>
+                        <button
+                          type="button"
+                          className="agent-configure-toggle"
+                          onClick={() => setAgentExpanded((prev) => ({ ...prev, [slot.id]: !prev[slot.id] }))}
+                          aria-expanded={isExpanded}
+                        >
+                          {isExpanded ? "▾ Configure" : "▸ Configure"}
+                        </button>
+                        {isExpanded ? (
+                          <div className="agent-configure">
+                            <form
+                              className="field-row"
+                              key={`${brain.id}-${budget?.limits.daily_invocations ?? "none"}-${budget?.limits.daily_dollars ?? "none"}`}
+                              onSubmit={(event) => saveBrainBudget(event, brain.id).catch((err) => setError(err.message))}
+                            >
+                              <label>
+                                Daily calls
+                                <input name="daily_invocations" type="number" min="1" step="1" placeholder="no cap" defaultValue={budget?.limits.daily_invocations ?? ""} />
+                              </label>
+                              <label>
+                                Daily $
+                                <input name="daily_dollars" type="number" min="0.0001" step="0.0001" placeholder="no cap" defaultValue={budget?.limits.daily_dollars ?? ""} />
+                              </label>
+                              <button type="submit" disabled={brainBusy === `budget:${brain.id}`} style={{ gridColumn: "1 / -1" }}>
+                                {brainBusy === `budget:${brain.id}` ? "Saving…" : "Save caps"}
+                              </button>
+                            </form>
+                            {isOrchestrator ? (
+                              <>
+                                <p className="hint">
+                                  Powers the orb. Base URL <code>{localBrainProbe?.base_url ?? "http://127.0.0.1:11434/v1"}</code> · model <code>{localBrainProbe?.model ?? "gemma4:e2b"}</code>.
+                                </p>
+                                <div className="probe-row">
+                                  <Button type="button" variant="secondary" disabled={localBrainBusy !== ""} onClick={() => runLocalBrainProbe().catch((err) => setError(err.message))}>
+                                    {localBrainBusy === "probe" ? "Probing…" : "Probe"}
+                                  </Button>
+                                  <Button type="button" variant="secondary" disabled={localBrainBusy !== ""} onClick={() => runLocalBrainTest().catch((err) => setError(err.message))}>
+                                    {localBrainBusy === "test" ? "Testing…" : "Test reply"}
+                                  </Button>
+                                  {localBrainProbe ? (
+                                    <span className="hint">
+                                      {localBrainProbe.reachable ? "✓ reachable" : "× unreachable"}
+                                      {typeof localBrainProbe.latency_ms === "number" ? ` · ${localBrainProbe.latency_ms} ms` : ""}
+                                      {localBrainProbe.reachable ? (localBrainProbe.model_present ? " · model present" : " · model not pulled") : ""}
+                                    </span>
+                                  ) : null}
+                                </div>
+                                {localBrainProbe && !localBrainProbe.reachable ? (
+                                  <p className="hint">
+                                    Start it with <code>ollama serve</code> and pull with <code>ollama pull {localBrainProbe.model ?? "gemma4:e2b"}</code>.
+                                    {localBrainProbe.error ? ` Detail: ${localBrainProbe.error}` : ""}
+                                  </p>
+                                ) : null}
+                                {localBrainTest?.reply ? (
+                                  <div className="moderator">
+                                    <strong>Test reply</strong>
+                                    <p>{localBrainTest.reply}</p>
+                                    {typeof localBrainTest.latency_ms === "number" ? <small className="hint">{localBrainTest.latency_ms} ms</small> : null}
+                                  </div>
+                                ) : null}
+                                {localBrainTest?.error ? (
+                                  <p className="hint" style={{ color: "#f4b8b8" }}>Test failed: {localBrainTest.error}</p>
+                                ) : null}
+                              </>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+
+                  <button type="button" className="routing-collapse" onClick={() => setShowRouting((v) => !v)} aria-expanded={showRouting}>
+                    {showRouting ? "▾ Hide routing" : "▸ Show routing"}
+                  </button>
+                  {showRouting ? (
+                    <div className="glass-card">
+                      <h3>Routing</h3>
+                      <div className="route-list">
+                        {brainRegistry.routing.map((route) => (
+                          <form className="route-row" key={`${route.concern}-${route.updated_at}`} onSubmit={(event) => saveBrainRoute(event, route.concern).catch((err) => setError(err.message))}>
+                            <div>
+                              <strong>{titleCase(route.concern)}</strong>
+                              <span>{route.brain_ids.map((brainId) => brainDisplayName(brainById.get(brainId), brainId)).join(" + ")}</span>
+                            </div>
+                            <select name="brain_ids" multiple defaultValue={route.brain_ids} size={Math.min(4, Math.max(2, brainRegistry.brains.length))}>
+                              {brainRegistry.brains.map((brain) => (
+                                <option key={brain.id} value={brain.id}>
+                                  {brainDisplayName(brain)} · {runtimeLabel(brain.runtime)}
+                                </option>
+                              ))}
+                            </select>
+                            <button type="submit" disabled={brainBusy === `route:${route.concern}`}>
+                              {brainBusy === `route:${route.concern}` ? "Saving…" : "Save"}
+                            </button>
+                          </form>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* MCP — condensed */}
+                  <div className="glass-card">
+                    <h3>MCP — Connections</h3>
+                    <div className="mcp-condensed">
+                      {(mcpEffective?.servers ?? []).filter((s) => mcpEnabled(s.config)).slice(0, 8).map((server) => (
+                        <div className="mcp-condensed-row" key={`${server.id}-${server.origin.path}`}>
+                          <strong>{server.id}</strong>
+                          <span>{server.origin.scope} · {mcpTransportSummary(server.config)}</span>
+                        </div>
+                      ))}
+                      {(mcpEffective?.servers ?? []).filter((s) => mcpEnabled(s.config)).length === 0 ? (
+                        <p className="hint">No MCP servers enabled.</p>
+                      ) : null}
+                    </div>
+                    <button type="button" className="mcp-expand-toggle" onClick={() => setMcpExpanded((v) => !v)} aria-expanded={mcpExpanded}>
+                      {mcpExpanded ? "▾ Hide manage" : "▸ Manage / Add server"}
+                    </button>
+                    {mcpExpanded ? (
+                      <div className="connection-toolbar">
+                        <div className="connection-tabs" role="tablist" aria-label="MCP connection scopes">
+                          {([
+                            { id: "effective" as McpScopeView, label: "Effective", meta: String(mcpSummary.total) },
+                            { id: "global" as McpScopeView, label: "Global", meta: String(Object.keys(mcpScopes.global?.config.mcpServers ?? {}).length) },
+                            { id: "workspace" as McpScopeView, label: "Workspace", meta: selectedWorkspace?.slug ?? "none", disabled: !selectedWorkspace },
+                            { id: "repo" as McpScopeView, label: "Repo", meta: mcpScopes.repo ? "linked" : "none", disabled: !selectedWorkspace }
+                          ] as Array<{ id: McpScopeView; label: string; meta: string; disabled?: boolean }>).map((tab) => (
+                            <button
+                              aria-pressed={mcpScopeView === tab.id}
+                              disabled={tab.disabled}
+                              key={tab.id}
+                              onClick={() => setMcpScopeView(tab.id)}
+                              type="button"
+                            >
+                              <strong>{tab.label}</strong>
+                              <span>{tab.meta}</span>
+                            </button>
+                          ))}
+                        </div>
+                        <div className="connection-buttons">
+                          <button type="button" disabled={Boolean(mcpBusy)} onClick={() => refreshConnections(selectedSlug).catch((err) => setError(err.message))}>
+                            <RefreshCw className="size-4" /> Refresh
+                          </button>
+                          <button type="button" disabled={Boolean(mcpBusy)} onClick={() => runMcpDoctor().catch((err) => setError(err.message))}>
+                            <Waypoints className="size-4" /> Doctor
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* Memory link */}
+                  <div className="glass-card">
+                    <h3>Memory</h3>
+                    <p className="hint">The wiki memory has moved off the main nav. Open it from the command palette (⌘K) — “Go to Memory”.</p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => {
+                        setSettingsOpen(false);
+                        setActiveView("memory");
+                        setRightPanelOpen(true);
+                        setSessionsOpen(false);
+                      }}
+                    >
+                      Open Memory
+                    </Button>
+                  </div>
+
+                  {showAdvancedDashboards ? (
+                    <>
+                      <section className="glass-card">
+                        <h3>Cost Today</h3>
+                        <div className="cost-metrics">
+                          <div><strong>{costSummary?.totals.invocations ?? 0}</strong><span>calls</span></div>
+                          <div><strong>{formatDuration(costSummary?.totals.duration_ms ?? 0)}</strong><span>duration</span></div>
+                          <div><strong>{(costSummary?.totals.tokens_in ?? 0) + (costSummary?.totals.tokens_out ?? 0)}</strong><span>tokens</span></div>
+                          <div><strong>{formatDollars(costSummary?.totals.dollars_estimate ?? 0)}</strong><span>est.</span></div>
+                        </div>
+                      </section>
+                      <section className="glass-card">
+                        <h3>Quota Ledger</h3>
+                        <div className="quota-list">
+                          {quotaLedger.map((entry) => (
+                            <div className="quota-row" key={entry.id}>
+                              <strong>{entry.policy_id}</strong>
+                              <span>{entry.target} · {entry.metric} · {formatMetric(entry.amount, entry.metric)}</span>
+                            </div>
+                          ))}
+                          {quotaLedger.length === 0 ? <p className="hint">No quota events yet.</p> : null}
+                        </div>
+                      </section>
+                    </>
+                  ) : null}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {paletteOpen ? (() => {
+        const allCommands: Array<{ id: string; label: string; meta?: string; run: () => void }> = [
+          { id: "go-overview", label: "Go to Overview", meta: "view", run: () => openCommandPanel("overview") },
+          { id: "go-sessions", label: "Go to Sessions", meta: "view", run: () => openCommandPanel("sessions") },
+          { id: "go-workspaces", label: "Go to Workspaces", meta: "view", run: () => openCommandPanel("workspaces") },
+          { id: "go-memory", label: "Go to Memory", meta: "view", run: () => openCommandPanel("memory") },
+          { id: "go-planning", label: "Go to Planning", meta: "view", run: () => openCommandPanel("planning") },
+          {
+            id: "launch-session",
+            label: "Launch session…",
+            meta: "⌘L",
+            run: () => {
+              if (!selectedWorkspace || enabledBrains.length === 0) {
+                setError(selectedWorkspace ? "No brains enabled — check Settings → Advanced." : "Select a workspace first.");
+                return;
+              }
+              setLaunchTaskId("");
+              setLaunchGoal("");
+              setSessionLaunchOpen(true);
+            }
+          },
+          { id: "open-settings", label: "Open settings", meta: "modal", run: () => { setSettingsOpen(true); setSettingsTab("standard"); } },
+          { id: "new-workspace", label: "New workspace…", meta: "create", run: () => setNewWorkspaceOpen(true) },
+          ...workspaces.map((workspace) => ({
+            id: `switch-${workspace.slug}`,
+            label: `Switch workspace to ${workspace.slug}`,
+            meta: "switch",
+            run: () => setSelectedSlug(workspace.slug)
+          })),
+          {
+            id: "refresh",
+            label: "Refresh",
+            meta: "sync",
+            run: () => refresh().then(() => Promise.all([refreshPlanSurface(), refreshSessionSurface()])).catch((err) => setError(err.message))
+          }
+        ];
+        const filtered = paletteQuery.trim().length === 0
+          ? allCommands
+          : allCommands.filter((cmd) => cmd.label.toLowerCase().includes(paletteQuery.trim().toLowerCase()));
+        const safeIndex = filtered.length === 0 ? 0 : Math.min(paletteIndex, filtered.length - 1);
+        const runCommand = (cmd: { run: () => void }) => {
+          setPaletteOpen(false);
+          setPaletteQuery("");
+          setPaletteIndex(0);
+          cmd.run();
+        };
+        return (
+          <div className="palette-backdrop" onClick={() => setPaletteOpen(false)}>
+            <div className="palette" role="dialog" aria-label="Command palette" onClick={(event) => event.stopPropagation()}>
+              <input
+                autoFocus
+                value={paletteQuery}
+                placeholder="Type a command…"
+                onChange={(event) => { setPaletteQuery(event.target.value); setPaletteIndex(0); }}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setPaletteIndex((i) => Math.min(filtered.length - 1, i + 1));
+                  } else if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setPaletteIndex((i) => Math.max(0, i - 1));
+                  } else if (event.key === "Enter") {
+                    event.preventDefault();
+                    const cmd = filtered[safeIndex];
+                    if (cmd) runCommand(cmd);
+                  }
+                }}
+              />
+              {filtered.length === 0 ? (
+                <p className="empty">No commands match "{paletteQuery}".</p>
+              ) : (
+                <ul role="listbox">
+                  {filtered.map((cmd, i) => (
+                    <li key={cmd.id} className={i === safeIndex ? "active" : ""}>
+                      <button type="button" onClick={() => runCommand(cmd)}>
+                        <span>{cmd.label}</span>
+                        {cmd.meta ? <span className="meta">{cmd.meta}</span> : null}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        );
+      })() : null}
 
       {sessionLaunchOpen ? (
         <div className="picker-backdrop" onClick={() => sessionBusy === "" && setSessionLaunchOpen(false)}>
