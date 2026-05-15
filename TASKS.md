@@ -26,10 +26,6 @@
   - Doc: [docs/task/016-agentic-orb-conductor.md](docs/task/016-agentic-orb-conductor.md)
   - Goal: Add an action layer on top of the orb chat. The orb classifies messages as chat vs. conductor, plans multi-step actions in a typed JSON schema (`create_task`, `launch_session`, etc.), confirms inline before executing, runs steps through internal handlers, streams `step_started` / `step_completed` SSE events into the transcript, and watches the launched session's lifecycle in-thread until it reaches a terminal state. Reuses task 015's glass aesthetic for the inline confirmation row. Builds on 014 (orb chat stream), 015 (UI shell, palette, inline patterns), and benefits from 017 (configurable chat prompt) — though 017 is recommended, not strictly required.
 
-- [ ] `17` Richer + Configurable Orb Context
-  - Doc: [docs/task/017-configurable-orb-context.md](docs/task/017-configurable-orb-context.md)
-  - Goal: Stop generic orb replies by including specific state (active workspace name, top open tasks, recent sessions, today's date) in the system prompt, AND expose a Settings card where the user can override the system prompt, toggle which categories are injected, and budget the total token cost. Builds on 014 and 015.
-
 - [ ] `15` Dark Agent-First UI Shell with Live Updates
   - Doc: [docs/task/015-dark-agent-first-ui-shell.md](docs/task/015-dark-agent-first-ui-shell.md)
   - Goal: Replace the light cluttered home with a dark orb-centric shell. Settings becomes a glass modal with Standard / Advanced tabs; agents are grouped by role (Harness 1/2, Orchestrator, Stub) with the local-brain panel folded into the Orchestrator card. Add Cmd+K command palette and Cmd+L launch shortcut. Improve the orb (less Earth-like, plasma palette, atmosphere ring, TTS-reactive pulsing). Make every mutation propagate live without manual page refresh.
@@ -192,6 +188,10 @@
   - Superseded by: [Task 015](docs/task/015-dark-agent-first-ui-shell.md). The UI direction shifted to a dark orb-centric shell with a Settings modal and command palette; the surfaces 013 was going to refactor are retired or moved behind the palette.
 
 ## Done
+
+- [x] `17` Richer + Configurable Orb Context
+  - Doc: [docs/task/017-configurable-orb-context.md](docs/task/017-configurable-orb-context.md)
+  - Goal: Stop generic orb replies by including specific state (active workspace name, top open tasks, recent sessions, today's date) in the system prompt, AND expose a Settings card where the user can override the system prompt, toggle which categories are injected, and budget the total token cost. Builds on 014 and 015.
 
 - [x] `9` MCP Connections Layer
   - Doc: [docs/task/009-mcp-connections.md](docs/task/009-mcp-connections.md)

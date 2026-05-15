@@ -2798,6 +2798,63 @@ function App() {
       {error && <p className="banner error">{error}</p>}
       {message && <p className="banner">{message}</p>}
 
+      {awaitingPlanTurn ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Confirm plan">
+          <div className="glass-modal plan-modal">
+            <div className="glass-modal-header">
+              <h2>Permission needed</h2>
+              <span className="plan-modal-hint">⌘↵ run · esc cancel</span>
+            </div>
+            <div className="glass-modal-body">
+              <p className="plan-modal-intent">{awaitingPlanTurn.plan!.intent}</p>
+              <ol className="plan-modal-steps">
+                {awaitingPlanTurn.plan!.steps.map((step, idx) => {
+                  const args = step.args as Record<string, unknown>;
+                  let description: string;
+                  if (step.kind === "create_task") {
+                    description = `Create task "${String(args.title ?? "")}" in ${String(args.workspace_slug ?? "")}`;
+                  } else if (step.kind === "launch_session") {
+                    description = `Launch ${String(args.brain_id ?? "?")} (${String(args.mode ?? "headless")}) on ${String(args.workspace_slug ?? "?")}`;
+                  } else if (step.kind === "read_overview") {
+                    description = "Read the overview";
+                  } else if (step.kind === "read_session") {
+                    description = `Read session ${String(args.session_ref ?? "")}`;
+                  } else if (step.kind === "read_workspace") {
+                    description = `Read workspace ${String(args.workspace_slug ?? "")}`;
+                  } else {
+                    description = step.kind;
+                  }
+                  return (
+                    <li key={`${awaitingPlanTurn.id}-modal-step-${idx}`}>
+                      <span className="step-num">{idx + 1}</span>
+                      <span className="step-kind">{step.kind}</span>
+                      <span className="step-desc">{description}</span>
+                    </li>
+                  );
+                })}
+              </ol>
+              <div className="plan-modal-actions">
+                <button
+                  type="button"
+                  className="orb-plan-cancel"
+                  onClick={() => cancelOrbConductorPlan(awaitingPlanTurn.id)}
+                >
+                  ✕ Cancel
+                </button>
+                <button
+                  type="button"
+                  className="orb-plan-run"
+                  autoFocus
+                  onClick={() => runOrbConductorPlan(awaitingPlanTurn.id).catch((err) => setError(err.message))}
+                >
+                  ✓ Run plan
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <section className="orb-stage">
         <WardOrb pulseKey={orbPulse} intensity={orbIntensity} palette="ai" />
         <form className="orb-dock" onSubmit={(event) => submitOrbChat(event).catch((err) => setError(err.message))}>
@@ -2828,7 +2885,6 @@ function App() {
                 {orbTurns.slice(-12).map((turn, idx, list) => {
                   const isLastWard = idx === list.length - 1 && turn.role === "ward";
                   const showTyping = isLastWard && orbBusy && turn.text.length === 0;
-                  const isAwaiting = turn.role === "ward" && turn.plan && turn.planStatus === "awaiting";
                   return (
                     <div className={turn.role === "ward" ? "ward" : "user"} key={turn.id}>
                       <span>{turn.role === "ward" ? "WARD" : "You"}</span>
@@ -2864,25 +2920,6 @@ function App() {
                             </ul>
                           ) : null}
                           {turn.chainSummary ? <p className="orb-plan-summary">{turn.chainSummary}</p> : null}
-                          {isAwaiting ? (
-                            <div className="orb-plan-confirm">
-                              <button
-                                type="button"
-                                className="orb-plan-run"
-                                onClick={() => runOrbConductorPlan(turn.id).catch((err) => setError(err.message))}
-                              >
-                                ✓ Run plan
-                              </button>
-                              <button
-                                type="button"
-                                className="orb-plan-cancel"
-                                onClick={() => cancelOrbConductorPlan(turn.id)}
-                              >
-                                ✕ Cancel
-                              </button>
-                              <span className="orb-plan-hint">⌘↵ run · esc cancel</span>
-                            </div>
-                          ) : null}
                         </div>
                       ) : null}
                     </div>
