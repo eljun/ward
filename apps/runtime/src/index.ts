@@ -638,7 +638,7 @@ function defaultOrbHeader(): string {
   const profile = getProfile();
   const name = profile.display_name || profile.honorific || "the user";
   const tone = profile.persona_tone ?? "casual";
-  return `You are WARD, ${name}'s local peer developer. Tone: ${tone}. Reply in 1-3 short sentences unless asked for more.`;
+  return `You are WARD, ${name}'s local peer developer. Tone: ${tone}. Reply in 1-3 short sentences unless asked for more. When asked what to work on, name the active workspace and at least one open task title when available.`;
 }
 
 function buildWorkspaceBlock(): string {
@@ -648,10 +648,11 @@ function buildWorkspaceBlock(): string {
     return "Active workspace: (none — ask the user to create or open one).";
   }
   const repo = active.primary_repo_path ? ` (${active.primary_repo_path})` : "";
-  return `Active workspace: ${active.name}${repo}.`;
+  return `Active workspace: ${active.name} (slug: ${active.slug})${repo}. Name this workspace explicitly when recommending work.`;
 }
 
 function buildTaskBlock(limit: number): string {
+  const workspaceById = new Map(listWorkspaces().map((workspace) => [workspace.id, workspace.slug]));
   const open = listTasks().filter((task) => {
     return task.status !== "done"
       && task.status !== "canceled"
@@ -660,8 +661,12 @@ function buildTaskBlock(limit: number): string {
   if (open.length === 0) {
     return "Open tasks: (none).";
   }
-  const top = open.slice(0, limit).map((task) => `- ${task.id.slice(0, 12)} [${task.priority}] ${task.title}`);
-  return `Open tasks (top ${top.length}):\n${top.join("\n")}`;
+  const top = open.slice(0, limit).map((task) => {
+    const title = (task.title ?? "").trim() || "(untitled task — no title set)";
+    const workspace = workspaceById.get(task.workspace_id);
+    return `- [${task.priority}] ${title}${workspace ? ` (workspace: ${workspace})` : ""}`;
+  });
+  return `Open tasks (top ${top.length}). Refer to them by title in conversation; never read raw ids aloud:\n${top.join("\n")}`;
 }
 
 function buildSessionBlock(limit: number): string {
@@ -751,13 +756,17 @@ async function composeOrbSystemPrompt(headerOverride?: string): Promise<string> 
   const header = explicit || persisted || defaultOrbHeader();
   const blocks: string[] = [header];
   if (overrides.includeWorkspaces) blocks.push(buildWorkspaceBlock());
+  blocks.push(buildDateBlock());
   if (overrides.includeTasks) blocks.push(buildTaskBlock(3));
-  if (overrides.includeSessions) blocks.push(buildSessionBlock(3));
+  if (overrides.includeSessions) {
+    blocks.push(buildSessionBlock(3));
+  } else {
+    blocks.push("Recent sessions: not included because session context is disabled. If asked about finished or running sessions, say you do not have session details right now.");
+  }
   if (overrides.includeWiki) {
     const wiki = await buildWikiBlock();
     if (wiki) blocks.push(wiki);
   }
-  blocks.push(buildDateBlock());
   blocks.push(buildProfileBlock());
   blocks.push(buildClosingNote());
   return clampToBudget(blocks, overrides.tokenBudget);
@@ -809,10 +818,15 @@ function composeOrbConductorPrompt(): string {
     .map((b) => `- ${b.id}`)
     .join("\n") || "- stub-worker";
   const slugById = new Map<number, string>(workspaces.map((w) => [w.id, w.slug]));
-  const openTasks = listTasks().filter((t) => t.status !== "done" && t.status !== "canceled" && t.status !== "shipped");
+  const openTasks = listTasks()
+    .filter((t) => t.status !== "done" && t.status !== "canceled" && t.status !== "shipped")
+    .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
   const taskList = openTasks.length === 0
     ? "(no open tasks — if the user wants to launch on a task, create one first via create_task in the same plan)"
-    : openTasks.slice(0, 12).map((t) => `- ${t.id} [${slugById.get(t.workspace_id) ?? "?"}] ${t.title}`).join("\n");
+    : openTasks.slice(0, 12).map((t, idx) => {
+        const tag = idx === 0 ? " (most recent — this is what \"the new task\" usually refers to)" : "";
+        return `- ${t.id} [${slugById.get(t.workspace_id) ?? "?"}] ${t.title}${tag}`;
+      }).join("\n");
   return `You are W.A.R.D's orb conductor. The user has asked you to perform a multi-step action.
 
 You MUST reply with a single JSON object (no prose, no code fences) matching this schema:
@@ -919,10 +933,10 @@ async function generateOrbPlan(messages: ChatMessage[]): Promise<{ plan: OrbPlan
       model: brain.model,
       messages: msgs,
       temperature: 0.2,
-      max_tokens: 768,
+      max_tokens: 1024,
       keep_alive: "60m",
       think: false,
-      timeoutMs: 60000,
+      timeoutMs: 90000,
       extra: { format: "json" }
     });
     return result.text;
@@ -1113,32 +1127,21 @@ async function handleOrbConductorPlanStream(
     return;
   }
 
-  // Plan generation failed twice. Fall back to plain chat for this turn.
-  const chatMessages = await buildChatMessages(history, message);
-  try {
-    const brain = getLocalChatBrain();
-    if (!brain) {
-      send("error", { message: "No local OpenAI-compatible brain enabled." });
-      send("done", { trace_id: traceId, timestamp: ts });
-      return;
-    }
-    for await (const evt of streamOllamaChat({
-      baseUrl: brain.base_url,
-      model: brain.model,
-      messages: chatMessages,
-      temperature: 0.7,
-      max_tokens: 384,
-      keep_alive: "60m",
-      think: false,
-      timeoutMs: 120000
-    })) {
-      if (evt.type === "delta") send("delta", { text: evt.text });
-      else if (evt.type === "error") send("error", { message: evt.message });
-    }
-  } catch (err) {
-    send("error", { message: (err as Error).message });
+  // Plan generation failed twice. Surface the failure explicitly so the
+  // user does not see a hallucinated chat reply pretending the action
+  // happened. The raw model output is included for debugging.
+  const planError = "error" in result ? result.error : "Unknown plan failure.";
+  const rawSnippet = "raw" in result && result.raw ? result.raw.trim().slice(0, 200) : "";
+  const lines = [
+    "I tried to plan that as an action but couldn't draft a valid plan.",
+    `Reason: ${planError}`,
+    "Try rephrasing — be specific about the workspace slug, task title, and brain (e.g. \"launch claude-code-cli on task <title> in <workspace>\")."
+  ];
+  if (rawSnippet) {
+    lines.push(`(model said: ${JSON.stringify(rawSnippet)})`);
   }
-  send("done", { trace_id: traceId, timestamp: ts, planner_fallback: true });
+  send("delta", { text: lines.join("\n") });
+  send("done", { trace_id: traceId, timestamp: ts, planner_failed: true });
 }
 
 async function handleOrbChatStream(req: Request): Promise<Response> {

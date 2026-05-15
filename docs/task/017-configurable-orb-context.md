@@ -1,6 +1,6 @@
 # Task 017: Richer + Configurable Orb Context
 
-- Status: `testing`
+- Status: `done`
 - Type: `feature`
 - Version Impact: `minor`
 - Priority: `medium-high`
@@ -368,5 +368,40 @@ No schema changes. No new endpoints (uses existing
 - `bun run typecheck` — PASS
 - `bun run build` — PASS (vite build, tsc, depcruise, layer fixture)
 - `git diff --check` — PASS (no whitespace errors)
-- Manual UI smoke — SKIPPED (requires running daemon + Ollama; will
-  be exercised in the test stage).
+- Manual UI smoke — PASS in test stage; see
+  `docs/testing/017-configurable-orb-context.md`.
+
+## Quality Gate Notes
+
+### Result
+
+PASS
+
+### Standards Review
+
+- No blocking maintainability issues found in the Task 017 runtime/UI
+  paths after the verification fix.
+- The first default-context smoke showed the model naming the open task
+  but omitting the workspace. The runtime prompt was tightened so the
+  default header and workspace block explicitly ask the model to name
+  the active workspace when recommending work.
+- Task lines now include the workspace slug while still avoiding raw
+  task ids in conversational context.
+- Date context is inserted before larger task/session blocks so the
+  low-budget path keeps workspace/date context more reliably.
+- When recent-session context is disabled, the runtime now includes a
+  small explicit unavailable-session note so the model can answer
+  session questions honestly instead of guessing.
+
+### Deviations
+
+- Minor: the date block now appears before task/session blocks. This
+  better satisfies the acceptance criterion that low budgets keep
+  workspace + date while still trimming larger context first.
+- Minor: disabled session context is represented as an explicit
+  "not included" block rather than total omission. This is still within
+  scope because it proves the toggle changes what the model sees.
+
+### Required Fixes
+
+- None.

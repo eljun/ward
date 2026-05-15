@@ -456,6 +456,97 @@ label {
   margin-left: auto;
 }
 
+.plan-modal {
+  width: min(560px, 100%);
+  border-color: rgba(20, 101, 255, 0.32);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(20, 101, 255, 0.18);
+}
+
+.plan-modal-hint {
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.plan-modal-intent {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.4;
+}
+
+.plan-modal-steps {
+  list-style: none;
+  margin: 0;
+  padding: 10px 12px;
+  display: grid;
+  gap: 6px;
+  border-radius: 12px;
+  background: rgba(15, 22, 32, 0.32);
+  border: 1px solid rgba(120, 140, 160, 0.18);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+}
+
+.plan-modal-steps li {
+  display: grid;
+  grid-template-columns: 22px auto 1fr;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.plan-modal-steps .step-num {
+  color: var(--muted);
+}
+
+.plan-modal-steps .step-kind {
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.plan-modal-steps .step-desc {
+  color: var(--ink);
+}
+
+.plan-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.plan-modal-actions button {
+  appearance: none;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid rgba(120, 140, 160, 0.28);
+  background: rgba(250, 252, 255, 0.86);
+  color: var(--ink);
+  transition: background 120ms ease, transform 120ms ease;
+}
+
+.plan-modal-actions button:hover {
+  transform: translateY(-1px);
+}
+
+.plan-modal-actions .orb-plan-run {
+  background: rgba(20, 101, 255, 0.22);
+  border-color: rgba(20, 101, 255, 0.4);
+  color: var(--ink);
+}
+
+.plan-modal-actions .orb-plan-cancel {
+  background: rgba(180, 60, 70, 0.16);
+  border-color: rgba(180, 60, 70, 0.36);
+}
+
 .surface-drawer {
   position: fixed;
   top: 86px;
@@ -2825,8 +2916,8 @@ body.theme-dark .orb-transcript p {
 }
 
 .glass-modal {
-  width: min(720px, 100%);
-  max-height: min(80vh, 720px);
+  width: min(580px, 100%);
+  max-height: min(80vh, 580px);
   background: var(--surface-glass, rgba(15, 21, 24, 0.78));
   backdrop-filter: blur(22px);
   border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
